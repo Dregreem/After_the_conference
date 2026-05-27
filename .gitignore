@@ -1,0 +1,6 @@
+*.mat
+*.zip
+*.csv
+Results/
+12daymonthly analysis/DATA/
+Locations/Data/

@@ -1,0 +1,26 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "matlab": true,
+        "timeout": true,
+        "Set-Content": true,
+        "/^cd \"c:\\\\Users\\\\Kerem Bayer\\\\Desktop\\\\Mikro_Konferans\\\\Finalized_system_model_PI\" ; python -c \"\nwith open\\('CompareYield_TMY\\.m', 'r', encoding='utf-8'\\) as f:\n    content = f\\.read\\(\\)\n\n# Remove the duplicate old call\ncontent = content\\.replace\\(\n    '        \\[ErrorSignal, FSM_State, ~, ~\\] = StateManagerFSM\\(LDR_V, S_body, theta_p_curr, theta_t_curr, FSM_State, SupervisorParams, dt_outer, false\\);\\\\n        \\[FSM_State, ErrorSignal\\] = StateManagerFSM\\(LDR_signals, FSM_State, StatePan, StateTilt, time_sec\\);',\n    '        \\[ErrorSignal, FSM_State, ~, ~\\] = StateManagerFSM\\(LDR_V, S_body, theta_p_curr, theta_t_curr, FSM_State, SupervisorParams, dt_outer, false\\);'\n\\)\n\nwith open\\('CompareYield_TMY\\.m', 'w', encoding='utf-8'\\) as f:\n    f\\.write\\(content\\)\nprint\\('Removed duplicate FSM call'\\)\n\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "pdflatex": true,
+        "Move-Item": true,
+        "ForEach-Object": true,
+        "/^cd \"c:\\\\Users\\\\Kerem Bayer\\\\Desktop\\\\Mikro_Konferans\\\\Finalized_system_model_PI_V3\\\\DataPreparation\" ; powershell -Command \"Rename-Item -Path 'prepareDataForAnalysis\\.m' -NewName 'prepareDataForAnalysis_Hourly\\.m'\" 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^powershell -Command \"\\(Get-Content -Path 'C:\\\\Users\\\\Kerem Bayer\\\\Desktop\\\\Mikro_Konferans\\\\Finalized_system_model_PI_V3\\\\DataPreparation\\\\YTU_NASA_Hourly\\.csv'\\)\\[-50\\.\\.-1\\]\" \\| head -20$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^powershell -Command \"Select-String -Path 'C:\\\\Users\\\\Kerem Bayer\\\\Desktop\\\\Mikro_Konferans\\\\Finalized_system_model_PI_V3\\\\DataPreparation\\\\YTU_NASA_Hourly\\.csv' -Pattern 'YEAR\\|\\^2024' \\| Select -First 1\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

@@ -1,0 +1,1121 @@
+%% ╔════════════════════════════════════════════════════════════════════════╗
+%% ║              SOLAR TRACKER - OPTIMIZED MAIN (Refactored)               ║
+%% ║                                                                        ║
+%% ║  CHANGE ONLY 2 PARAMETERS - Everything else uses organized functions ║
+%% ╚════════════════════════════════════════════════════════════════════════╝
+
+clear; clc; close all;
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% ░░░░░░░░░░░░░░░░░░░░░░  CONFIGURATION  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+%% ════════════════════════════════════════════════════════════════════════════
+
+SCENARIO = 'SOLAR';           % REALISTIC, VEHICLE_SLOW, VEHICLE_FAST, ZENITH_STATIC, FLIP_BOUNDARY, EXTREME
+CONTROL_MODE = 'fuzzy';                 % 'pid' (PID velocity), 'fuzzy' (Mamdani FLC), or 'open_loop'
+PHYSICS_MODEL = 'THEORETICAL';         % 'SIMPLE' (Ideal Servo), 'COMPLEX' (DC Motor + Inductance), 'THEORETICAL' (Academic 2nd-order)
+
+fprintf('╔════════════════════════════════════════════════════════════════╗\n');
+fprintf('║  SOLAR TRACKER - OPTIMIZED MAIN (Function-Based Architecture) ║\n');
+fprintf('║                                                              ║\n');
+fprintf('║  Scenario:     %-40s ║\n', SCENARIO);
+fprintf('║  Control:      %-40s ║\n', CONTROL_MODE);
+fprintf('║  Physics:      %-40s ║\n', PHYSICS_MODEL);
+fprintf('╚════════════════════════════════════════════════════════════════╝\n\n');
+
+% Add all folders to path
+addpath(genpath(pwd));
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% LOAD SCENARIO & CONFIGURE SYSTEM
+%% ════════════════════════════════════════════════════════════════════════════
+
+fprintf('Loading scenario: %s\n', SCENARIO);
+Scenario = generateScenario(SCENARIO);
+
+spiral_speed = Scenario.spiral_speed;
+spiral_widen = Scenario.spiral_widen;
+duration_sec = Scenario.duration_sec;
+
+fprintf('Sun speed: %.4f °/s | Duration: %.0f s (%.1f min)\n\n', spiral_speed, duration_sec, duration_sec/60);
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% CONSTANTS & PARAMETERS
+%% ════════════════════════════════════════════════════════════════════════════
+
+% Only use real sun (getSunVector) if SOLAR_DAY scenario, otherwise use spiral
+TEST_MODE = ~strcmpi(Scenario.name, 'SOLAR_DAY');
+fprintf('TEST_MODE (spiral): %d | Scenario: %s | spiral_speed: %.4f\n', TEST_MODE, Scenario.name, spiral_speed);
+AnimationDelay = 0.01;
+DrawSkip = 5;
+
+dt_physics = 0.01;
+dt_control = 0.01;
+control_decimation = 1;
+
+SUPPLY_VOLTAGE = 6.0;       % For power calculation
+SERVO_INTERNAL_Kv = 10.0;   % Servo feedback gain
+
+% PI Parameters from scenario
+PID_Params.Kp_vel = Scenario.Kp_vel;
+PID_Params.Ki_vel = Scenario.Ki_vel;
+PID_Params.max_tracking_velocity = Scenario.max_tracking_velocity;
+PID_Params.smooth_alpha = Scenario.smooth_alpha;
+PID_Params.max_integral = 10;
+PID_Params.deadzone = 0.05;
+PID_Params.max_output = 30;
+PID_Params.velocity_damping = 0.10;
+PID_Params.pan_limit = 180;
+PID_Params.tilt_limit = 90;
+
+% FSM parameters
+PID_Params.night_threshold = 0.1;      % RESTORED: Lowered from 0.3V to unlock IDLE mode
+PID_Params.sun_lost_threshold = 0.5;
+PID_Params.sun_found_threshold = 1.0;
+PID_Params.lock_threshold = 0.5;
+PID_Params.search_speed = 3.0;
+PID_Params.zenith_pan_lock = true;
+
+% Derivative control & filtering (Phase 1 Engineering)
+PID_Params.Kd_vel = 0.08;              % ADDED: Derivative gain to fight stiction (0.02N·m)
+PID_Params.filter_N = 0.3;             % ADDED: Derivative filter coefficient (low-pass)
+
+%% FLC Parameters (Mamdani FLC - used when CONTROL_MODE = 'fuzzy')
+FLC_Params.error_range       = [-60, 60];
+FLC_Params.rate_range        = [-15, 15];
+FLC_Params.output_range      = [-20, 20];
+FLC_Params.rate_filter_alpha = 0.3;
+FLC_Params.output_gain       = 1.0;
+FLC_Params.defuzz_resolution = 101;
+FLC_Params.night_threshold    = PID_Params.night_threshold;
+FLC_Params.sun_lost_threshold = PID_Params.sun_lost_threshold;
+FLC_Params.sun_found_threshold = PID_Params.sun_found_threshold;
+FLC_Params.lock_threshold     = PID_Params.lock_threshold;
+FLC_Params.search_speed       = PID_Params.search_speed;
+FLC_Params.zenith_pan_lock    = PID_Params.zenith_pan_lock;
+FLC_Params.pan_limit          = PID_Params.pan_limit;
+FLC_Params.smooth_alpha       = PID_Params.smooth_alpha;
+
+% Servo configuration (SIMPLE mode)
+ServoProps.MaxSpeed = 40;
+ServoProps.Accel = 50;
+ServoProps.Jerk = 200;
+
+% DC Motor configuration (COMPLEX mode only)
+% Balanced parameters — verified: T_motor(0.24) > T_grav(0.15), stable at dt=0.01
+MotorProps.R_arm      = 5.0;     % Ω   - Armature resistance
+MotorProps.L_arm      = 0.05;    % H   - Inductance (τ_e = L/R = 10ms → phase lag)
+MotorProps.Ke         = 0.15;    % Back-EMF constant
+MotorProps.Kt         = 0.15;    % Torque constant
+MotorProps.MaxCurrent = 2.5;
+MotorProps.MaxTorque  = 0.35;
+
+% Theoretical servo configuration (THEORETICAL mode)
+% Pure 2nd-order nonlinear friction model with stiction
+TheoreticalProps.MaxTorque = 0.35;          % N⋅m
+TheoreticalProps.Inertia = 0.00015;         % kg⋅m²
+TheoreticalProps.ViscousDamping = 0.01;   % N⋅m⋅s/rad
+TheoreticalProps.StaticFriction = 0.02;   % N⋅m (stiction)
+TheoreticalProps.DynamicFriction = 0.015; % N⋅m (kinetic)
+TheoreticalProps.DeadbandVelocity = 0.05; % rad/s
+TheoreticalProps.ServoGain = 5.0;         % Control command gain (increased 50x to overcome friction)
+TheoreticalProps.PanLimitMin = -deg2rad(180);
+TheoreticalProps.PanLimitMax = deg2rad(180);
+TheoreticalProps.TiltLimitMin = -deg2rad(90);
+TheoreticalProps.TiltLimitMax = deg2rad(90);
+MotorProps.Ke         = 0.1;     % V·s/rad - Back-EMF constant
+MotorProps.Kt         = 0.1;     % N·m/A   - Torque constant
+MotorProps.V_supply   = 12.0;    % V   - Supply voltage
+MotorProps.J_total    = 0.002;   % kg·m²  - Geared servo + small panel
+MotorProps.B_viscous  = 0.01;    % N·m·s/rad - Viscous damping
+MotorProps.T_stiction = 0.02;    % N·m  - Stiction (causes PI steady-state error)
+MotorProps.T_coulomb  = 0.01;    % N·m  - Coulomb friction
+MotorProps.m_load     = 0.3;     % kg   - Panel mass
+MotorProps.L_cg       = 0.05;    % m    - CG distance
+MotorProps.K_drive    = 1.5;     % V/deg - Internal servo proportional drive
+MotorProps.MaxSpeed   = 40.0;    % deg/s speed limit
+MotorProps.pan_limit  = 180;     % deg  mechanical limit
+MotorProps.Backlash   = 0.0;     % deg  (disabled for clean comparison)
+
+% Flip logic
+USE_FLIP_LOGIC = true;
+FLIP_OVERRIDE_FACTOR = 0.5;
+FlipLimits.Pan = 90;
+FlipLimits.Tilt = 90;
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% SYSTEM INITIALIZATION
+%% ════════════════════════════════════════════════════════════════════════════
+
+fprintf('Initializing system...\n');
+
+% Location and time
+lat = 41.0082; lon = 28.9784; tz = 3;
+SimDate = datetime(2024, 6, 21, 5, 0, 0);
+SunDistance = 1.0; R_dome = 4;
+
+% Sensor and servo dimensions
+SensorApexAngle = 120;
+PanServoDim = [0.040, 0.020, 0.040];
+TiltServoDim = [0.040, 0.020, 0.040];
+SensorParams.ApexAngle = SensorApexAngle;
+SensorParams.Scale = 1;
+
+% Initialize visualization
+handles = initSolarWorld(R_dome);
+ax = gca; set(ax, 'OuterPosition', [0, 0, 0.75, 1]);
+Mech = initSystemMechanics(ax, PanServoDim, TiltServoDim, SensorParams);
+
+% Servo states
+StatePan = struct('Angle', 0, 'Velocity', 0, 'Current', 0);
+StateTilt = struct('Angle', 0, 'Velocity', 0, 'Current', 0);
+
+% Scenario-specific initialization
+if strcmp(SCENARIO, 'ZENITH_STATIC')
+    StatePan.Angle = 45.0;
+    StateTilt.Angle = 2.0;
+    fprintf('Initialized at Pan=45°, Tilt=2° (near zenith)\n');
+elseif strcmp(SCENARIO, 'FLIP_BOUNDARY')
+    StatePan.Angle = 10.0;
+    StateTilt.Angle = 45.0;
+    fprintf('Initialized at Pan=10°, Tilt=45° for flip test\n');
+end
+
+% FSM state (Supervisor persistence)
+FSM_State = struct('mode', 'TRACKING', 'e_pan_prev', 0, 'e_tilt_prev', 0, ...
+                   'de_pan_filtered', 0, 'de_tilt_filtered', 0, 'search_phase', 0);
+
+% Controller state (PID integrators / FLC placeholder)
+ControlState = struct('I_pan', 0, 'I_tilt', 0);
+
+% Supervisor parameters (shared by both controllers)
+SupervisorParams = struct();
+SupervisorParams.night_threshold  = PID_Params.night_threshold;
+SupervisorParams.search_speed     = PID_Params.search_speed;
+SupervisorParams.zenith_pan_lock  = PID_Params.zenith_pan_lock;
+SupervisorParams.rate_filter_alpha = 0.3;
+
+% Command smoothing
+CommandSmoothing = struct('target_pan_smoothed', 0, 'target_tilt_smoothed', 0);
+
+% Flip tracking
+flip_state = struct('is_flipped', false, 'flip_count', 0, 'last_flip_time', -inf);
+FlipLog = struct('times', [], 'is_flipped', [], 'azimuth_sun', [], 'elevation_sun', [], ...
+                 'is_reachable', [], 'target_pan_final', [], 'target_tilt_final', []);
+
+% Info box for display
+InfoBox = annotation('textbox', [0.76, 0.2, 0.23, 0.7], ...
+                     'String', 'Initializing...', ...
+                     'EdgeColor', 'k', 'BackgroundColor', [0.95 0.95 0.95], ...
+                     'FaceAlpha', 0.8, 'FontSize', 10, 'FontName', 'Consolas');
+
+fprintf('✓ System initialized\n\n');
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% SIMULATION LOOP
+%% ════════════════════════════════════════════════════════════════════════════
+
+time_vector = 0 : dt_physics : duration_sec;
+num_steps = length(time_vector);
+
+% Preallocate logs
+Log.Time = time_vector;
+Log.TargetPan = zeros(num_steps, 1); Log.ActualPan = zeros(num_steps, 1);
+Log.TargetTilt = zeros(num_steps, 1); Log.ActualTilt = zeros(num_steps, 1);
+Log.ServoVelPan = zeros(num_steps, 1); Log.ServoVelTilt = zeros(num_steps, 1);
+Log.I_Pan = zeros(num_steps, 1); Log.I_Tilt = zeros(num_steps, 1);
+Log.IsFlip = zeros(num_steps, 1);
+Log.LDR_Voltage = zeros(num_steps, 4); Log.FSM_Mode = cell(num_steps, 1);
+Log.V_Total = zeros(num_steps, 1);
+Log.E_norm_Pan = zeros(num_steps, 1); Log.E_norm_Tilt = zeros(num_steps, 1);
+Log.E_deg_Pan = zeros(num_steps, 1); Log.E_deg_Tilt = zeros(num_steps, 1);
+Log.Incidence = zeros(num_steps, 1); Log.IsLocked = zeros(num_steps, 1);
+Log.PID_P_Pan = zeros(num_steps, 1); Log.PID_I_Pan = zeros(num_steps, 1); Log.PID_D_Pan = zeros(num_steps, 1);
+Log.PID_P_Tilt = zeros(num_steps, 1); Log.PID_I_Tilt = zeros(num_steps, 1); Log.PID_D_Tilt = zeros(num_steps, 1);
+Log.Power_Pan = zeros(num_steps, 1); Log.Power_Tilt = zeros(num_steps, 1); Log.Power_Total = zeros(num_steps, 1);
+Log.LockCounter = zeros(num_steps, 1);
+Log.LDR_DynamicRange = zeros(num_steps, 1);
+Log.Servo_Velocity_Pan = zeros(num_steps, 1); Log.Servo_Velocity_Tilt = zeros(num_steps, 1);
+Log.Servo_EquivD_Pan = zeros(num_steps, 1); Log.Servo_EquivD_Tilt = zeros(num_steps, 1);
+Log.Irradiance = zeros(num_steps, 1);  % Solar irradiance W/m^2
+Log.SolarPower = zeros(num_steps, 1); % Available solar power (based on sun elevation)
+Log.FLC_Vel_Pan = zeros(num_steps, 1); Log.FLC_Vel_Tilt = zeros(num_steps, 1);
+Log.FLC_Rate_Pan = zeros(num_steps, 1); Log.FLC_Rate_Tilt = zeros(num_steps, 1);
+
+fprintf('Starting simulation (%d steps, %.0f seconds)...\n\n', num_steps, duration_sec);
+
+for i = 1:num_steps
+    % Safety check
+    if ~isvalid(handles.h_Sun) || ~isvalid(Mech.h_Pan)
+        fprintf('Simulation stopped (Window closed).\n');
+        break;
+    end
+    
+    current_time = SimDate + seconds(time_vector(i));
+    sim_time_elapsed = time_vector(i);
+    
+    %% SUN POSITION
+    if TEST_MODE
+        angle_phi = spiral_speed * sim_time_elapsed;
+        angle_alpha = 90 - (spiral_widen * sim_time_elapsed);
+        if angle_alpha < 0, angle_alpha = 0; end
+        
+        az = deg2rad(angle_phi);
+        el = deg2rad(angle_alpha);
+        
+        % ENU Frame: must match getSunVector.m frame definition
+        % S_x = cos(el) * sin(az)  [East]
+        % S_y = cos(el) * cos(az)  [North]
+        % S_z = sin(el)             [Up]
+        S_vec = [cos(el)*sin(az); cos(el)*cos(az); sin(el)];
+        alpha = angle_alpha;
+        phi = angle_phi;
+    else
+        [S_vec, alpha, phi] = getSunVector( ...
+            Scenario.lat, Scenario.lon, current_time, Scenario.timezone);
+        if alpha <= 0
+            alpha = 0;
+            S_vec = [0, 0, 0];
+        end
+    end
+    
+    %% CONTROL UPDATE
+    if mod(i-1, control_decimation) == 0
+        theta_pan_curr = StatePan.Angle;
+        theta_tilt_curr = StateTilt.Angle;
+        
+        % Transform sun vector to body frame
+        cp = cosd(theta_pan_curr); sp = sind(theta_pan_curr);
+        ct = cosd(theta_tilt_curr); st = sind(theta_tilt_curr);
+        
+        Sx_rz = cp*S_vec(1) - sp*S_vec(2);
+        Sy_rz = sp*S_vec(1) + cp*S_vec(2);
+        Sz_rz = S_vec(3);
+        
+        S_body_pre = [ct*Sx_rz - st*Sz_rz; Sy_rz; st*Sx_rz + ct*Sz_rz];
+        S_body_norm = S_body_pre / (norm(S_body_pre) + 1e-8);
+        
+        % Read LDR sensors
+        [~, LDR_V_ctrl, ~, ~] = readLDRs(S_body_norm, SensorApexAngle);
+        
+        % Get sun position in world frame
+        [azimuth_sun, elevation_sun] = cartesian2spherical(S_vec);
+        ideal_pan_from_azimuth = azimuth_sun;
+        ideal_tilt_from_elevation = max(-90, min(90, 90 - elevation_sun));
+        
+        if ideal_pan_from_azimuth > 180
+            ideal_pan_from_azimuth = ideal_pan_from_azimuth - 360;
+        end
+        
+        % Apply flip logic
+        if USE_FLIP_LOGIC
+            [adjusted_pan_from_sun, adjusted_tilt_from_sun, is_flip, is_reachable] = ...
+                applyFlipLogic(ideal_pan_from_azimuth, ideal_tilt_from_elevation, FlipLimits);
+        else
+            adjusted_pan_from_sun = ideal_pan_from_azimuth;
+            adjusted_tilt_from_sun = ideal_tilt_from_elevation;
+            is_flip = false;
+            is_reachable = true;
+        end
+        
+        %% ═══ BLOCK A: SUPERVISOR (StateManagerFSM) ═══
+        [ErrorSignal, FSM_State, DebugSup] = StateManagerFSM(...
+            LDR_V_ctrl, S_body_pre, theta_pan_curr, theta_tilt_curr, ...
+            FSM_State, SupervisorParams, dt_control, is_flip);
+        
+        %% ═══ BLOCK B: CONTROLLER (Swappable) ═══
+        if strcmp(CONTROL_MODE, 'fuzzy')
+            [VelCmd, ControlState, DebugCtrl] = FuzzyLogicController(...
+                ErrorSignal, ControlState, FLC_Params, dt_control);
+        else
+            [VelCmd, ControlState, DebugCtrl] = PID_VelocityController(...
+                ErrorSignal, ControlState, PID_Params, dt_control);
+        end
+        
+        %% ═══ VELOCITY → POSITION INTEGRATION (was inside Controller) ═══
+        pan_limit_val = getFieldOrDefault_main(PID_Params, 'pan_limit', 180);
+        target_pan_from_ctrl  = theta_pan_curr  + VelCmd.v_pan  * dt_control;
+        target_tilt_from_ctrl = theta_tilt_curr + VelCmd.v_tilt * dt_control;
+        target_pan_from_ctrl  = max(-pan_limit_val, min(pan_limit_val, target_pan_from_ctrl));
+        target_tilt_from_ctrl = max(-90, min(90, target_tilt_from_ctrl));
+        
+        % Blend with flip logic
+        if is_reachable && USE_FLIP_LOGIC && FLIP_OVERRIDE_FACTOR > 0
+            target_pan = target_pan_from_ctrl + FLIP_OVERRIDE_FACTOR * (adjusted_pan_from_sun - target_pan_from_ctrl);
+            target_tilt = target_tilt_from_ctrl + FLIP_OVERRIDE_FACTOR * (adjusted_tilt_from_sun - target_tilt_from_ctrl);
+        else
+            target_pan = target_pan_from_ctrl;
+            target_tilt = target_tilt_from_ctrl;
+        end
+        
+        % Build DebugFSM from Supervisor output for downstream compatibility
+        DebugFSM = DebugSup;
+        DebugFSM.vel_pan  = VelCmd.v_pan;
+        DebugFSM.vel_tilt = VelCmd.v_tilt;
+        DebugFSM.target_pan  = target_pan;
+        DebugFSM.target_tilt = target_tilt;
+        
+        % Command smoothing
+        if strcmp(CONTROL_MODE, 'fuzzy')
+            smooth_alpha_active = FLC_Params.smooth_alpha;
+        else
+            smooth_alpha_active = PID_Params.smooth_alpha;
+        end
+        CommandSmoothing.target_pan_smoothed = (1 - smooth_alpha_active) * CommandSmoothing.target_pan_smoothed + smooth_alpha_active * target_pan;
+        CommandSmoothing.target_tilt_smoothed = (1 - smooth_alpha_active) * CommandSmoothing.target_tilt_smoothed + smooth_alpha_active * target_tilt;
+        
+        % Log flip data
+        if USE_FLIP_LOGIC
+            FlipLog.times = [FlipLog.times, sim_time_elapsed];
+            FlipLog.is_flipped = [FlipLog.is_flipped, is_flip];
+            FlipLog.azimuth_sun = [FlipLog.azimuth_sun, azimuth_sun];
+            FlipLog.elevation_sun = [FlipLog.elevation_sun, elevation_sun];
+            FlipLog.is_reachable = [FlipLog.is_reachable, is_reachable];
+            FlipLog.target_pan_final = [FlipLog.target_pan_final, target_pan];
+            FlipLog.target_tilt_final = [FlipLog.target_tilt_final, target_tilt];
+            if is_flip && ~flip_state.is_flipped
+                flip_state.is_flipped = true;
+                flip_state.flip_count = flip_state.flip_count + 1;
+                flip_state.last_flip_time = sim_time_elapsed;
+            elseif ~is_flip && flip_state.is_flipped
+                flip_state.is_flipped = false;
+            end
+        end
+    end
+    
+    target_pan_smooth = CommandSmoothing.target_pan_smoothed;
+    target_tilt_smooth = CommandSmoothing.target_tilt_smoothed;
+    
+    %% SERVO PHYSICS (Model dispatch — Block C)
+    if strcmp(PHYSICS_MODEL, 'COMPLEX')
+        [StatePan, ~]  = stepDCMotorPhysics(StatePan, target_pan_smooth, MotorProps, dt_physics, 'Pan');
+        [StateTilt, ~] = stepDCMotorPhysics(StateTilt, target_tilt_smooth, MotorProps, dt_physics, 'Tilt');
+    elseif strcmp(PHYSICS_MODEL, 'THEORETICAL')
+        [StatePan, ~]  = stepTheoreticalServo(StatePan, target_pan_smooth, TheoreticalProps, dt_physics, 'Pan');
+        [StateTilt, ~] = stepTheoreticalServo(StateTilt, target_tilt_smooth, TheoreticalProps, dt_physics, 'Tilt');
+    else
+        [StatePan, ~]  = stepAdvancedServoPhysics(StatePan, target_pan_smooth, ServoProps, dt_physics, 'Pan');
+        [StateTilt, ~] = stepAdvancedServoPhysics(StateTilt, target_tilt_smooth, ServoProps, dt_physics, 'Tilt');
+    end
+    
+    theta_pan = StatePan.Angle;
+    theta_tilt = StateTilt.Angle;
+    
+    %% ═══ BODY ANIMATION (Every Step) ═══
+    % Update hgtransform matrices every physics step for smooth motion
+    % (NOT just every visualization step, otherwise body lags motor state)
+    try
+        M_pan = makehgtform('zrotate', deg2rad(theta_pan));
+        set(Mech.h_Pan, 'Matrix', M_pan);
+        
+        M_tilt_trans = makehgtform('translate', Mech.PivotOffset);
+        M_tilt_rot = makehgtform('yrotate', deg2rad(theta_tilt));
+        set(Mech.h_Tilt, 'Matrix', M_tilt_trans * M_tilt_rot);
+    catch
+        % Handle silently; visualization may have window closed
+    end
+    
+    %% VISUALIZATION & INFO DISPLAY
+    if mod(i, DrawSkip) == 0
+        try
+            P_sun = S_vec * SunDistance;
+            if isvalid(handles.h_PathSun)
+                addpoints(handles.h_PathSun, P_sun(1), P_sun(2), P_sun(3));
+            end
+            updateSolarWorld(handles, S_vec, SunDistance, current_time, alpha, phi);
+            
+            % Calculate and draw tracker path (Red Line)
+            M_pan_temp = makehgtform('zrotate', deg2rad(theta_pan));
+            M_tilt_temp = makehgtform('yrotate', deg2rad(theta_tilt));
+            R_Total = M_pan_temp(1:3,1:3) * M_tilt_temp(1:3,1:3);
+            P_Tracker = (R_Total * [0;0;1]) * SunDistance;
+            if isvalid(handles.h_PathTracker)
+                addpoints(handles.h_PathTracker, P_Tracker(1), P_Tracker(2), P_Tracker(3));
+            end
+        catch
+            % Silently handle graphics errors (window may be closed)
+        end
+        
+        try
+            % Metrics for display
+            [E_pan_disp, E_tilt_disp, E_deg_pan_disp, E_deg_tilt_disp, ~] = controlLDR(...
+                LDR_V_ctrl(1), LDR_V_ctrl(2), LDR_V_ctrl(3), LDR_V_ctrl(4), S_body_norm);
+            [theta_inc_disp, ~] = checkAlignment(S_body_norm);
+            
+            flip_indicator = ternary(is_flip, '🔄 FLIP', '→ NORMAL');
+            
+            % Update info box
+            InfoStr = {
+                sprintf('═══════ SCENARIO: %s ═══════', upper(SCENARIO)), ...
+                '', ...
+                sprintf('TIME: %.1f / %.0f s', sim_time_elapsed, duration_sec), ...
+                '', ...
+                sprintf('☀️  SUN POSITION'), ...
+                sprintf('    Az: %.1f°  |  El: %.1f°', azimuth_sun, elevation_sun), ...
+                '', ...
+                sprintf('📡 LDR VOLTAGES'), ...
+                sprintf('    R:%.2fV  L:%.2fV  U:%.2fV  D:%.2fV', ...
+                        LDR_V_ctrl(1), LDR_V_ctrl(2), LDR_V_ctrl(3), LDR_V_ctrl(4)), ...
+                sprintf('    Total: %.2f V', sum(LDR_V_ctrl)), ...
+                '', ...
+                sprintf('🎯 MOTOR ANGLES'), ...
+                sprintf('    Pan:  %.1f°  |  Tilt: %.1f°', theta_pan, theta_tilt), ...
+                '', ...
+                sprintf('❌ ERRORS'), ...
+                sprintf('    Pan:  %+.2f°  |  Tilt: %+.2f°', E_deg_pan_disp, E_deg_tilt_disp), ...
+                sprintf('    Inc:  %.3f°  (Target: <0.5°)', theta_inc_disp), ...
+                '', ...
+                sprintf('⚡ MOTOR CURRENT'), ...
+                sprintf('    Pan: %.3f A  |  Tilt: %.3f A', StatePan.Current, StateTilt.Current), ...
+                sprintf('    V_Pan: %.1f °/s | V_Tilt: %.1f °/s', abs(StatePan.Velocity), abs(StateTilt.Velocity)), ...
+                '', ...
+                sprintf('🔄 FLIP: %s (Count: %d)', flip_indicator, flip_state.flip_count)
+            };
+            set(InfoBox, 'String', InfoStr);
+            drawnow limitrate;
+        catch
+            fprintf('Graphics error. Continuing...\n');
+            break;
+        end
+    end
+    
+    %% LOGGING
+    Log.TargetPan(i) = target_pan; Log.ActualPan(i) = theta_pan;
+    Log.TargetTilt(i) = target_tilt; Log.ActualTilt(i) = theta_tilt;
+    Log.ServoVelPan(i) = abs(StatePan.Velocity);
+    Log.ServoVelTilt(i) = abs(StateTilt.Velocity);
+    Log.I_Pan(i) = StatePan.Current;
+    Log.I_Tilt(i) = StateTilt.Current;
+    Log.IsFlip(i) = is_flip;
+    Log.FSM_Mode{i} = DebugFSM.mode;
+    Log.V_Total(i) = sum(LDR_V_ctrl);
+    Log.LDR_Voltage(i,:) = LDR_V_ctrl;
+    
+    [E_pan, E_tilt, E_deg_pan, E_deg_tilt, ldr_locked] = controlLDR(...
+        LDR_V_ctrl(1), LDR_V_ctrl(2), LDR_V_ctrl(3), LDR_V_ctrl(4), S_body_norm);
+    Log.E_deg_Pan(i) = E_deg_pan;
+    Log.E_deg_Tilt(i) = E_deg_tilt;
+    Log.E_norm_Pan(i) = E_pan;
+    Log.E_norm_Tilt(i) = E_tilt;
+    Log.IsLocked(i) = ldr_locked;
+    
+    [theta_inc, ~] = checkAlignment(S_body_norm);
+    Log.Incidence(i) = theta_inc;
+    
+    % Control Terms Logging (3-Block Architecture)
+    if strcmp(CONTROL_MODE, 'fuzzy')
+        Log.FLC_Vel_Pan(i)  = VelCmd.v_pan;
+        Log.FLC_Vel_Tilt(i) = VelCmd.v_tilt;
+        Log.FLC_Rate_Pan(i) = ErrorSignal.de_pan;
+        Log.FLC_Rate_Tilt(i) = ErrorSignal.de_tilt;
+        Log.PID_P_Pan(i) = 0; Log.PID_P_Tilt(i) = 0;
+        Log.PID_I_Pan(i) = 0; Log.PID_I_Tilt(i) = 0;
+        Log.PID_D_Pan(i) = 0; Log.PID_D_Tilt(i) = 0;
+    else
+        Log.PID_P_Pan(i) = DebugCtrl.P_pan;
+        Log.PID_P_Tilt(i) = DebugCtrl.P_tilt;
+        Log.PID_I_Pan(i) = DebugCtrl.I_pan;
+        Log.PID_I_Tilt(i) = DebugCtrl.I_tilt;
+        Log.PID_D_Pan(i) = DebugCtrl.D_pan;
+        Log.PID_D_Tilt(i) = DebugCtrl.D_tilt;
+    end
+    
+    Log.Servo_Velocity_Pan(i) = StatePan.Velocity;
+    Log.Servo_Velocity_Tilt(i) = StateTilt.Velocity;
+    
+    servo_error_pan = target_pan_smooth - theta_pan;
+    servo_error_tilt = target_tilt_smooth - theta_tilt;
+    Log.Servo_EquivD_Pan(i) = SERVO_INTERNAL_Kv * servo_error_pan;
+    Log.Servo_EquivD_Tilt(i) = SERVO_INTERNAL_Kv * servo_error_tilt;
+    
+    Log.Power_Pan(i) = StatePan.Current * SUPPLY_VOLTAGE;
+    Log.Power_Tilt(i) = StateTilt.Current * SUPPLY_VOLTAGE;
+    Log.Power_Total(i) = Log.Power_Pan(i) + Log.Power_Tilt(i);
+    
+    % Calculate solar irradiance based on elevation angle
+    % Model: max 1000 W/m^2 at zenith, decreases with lower elevation
+    sun_el_rad = deg2rad(elevation_sun);
+    irradiance = 1000 * max(0, sin(sun_el_rad));  % Clear-sky model
+    Log.Irradiance(i) = irradiance;
+    % Assume small solar panel area of ~0.05 m^2 (solar tracker size)
+    panel_area = 0.05;  % m^2
+    Log.SolarPower(i) = irradiance * panel_area * 0.15; % 15% efficiency
+    
+    if theta_inc < PID_Params.lock_threshold
+        Log.LockCounter(i) = 1;
+    else
+        Log.LockCounter(i) = 0;
+    end
+    
+    Log.LDR_DynamicRange(i) = max(LDR_V_ctrl) - min(LDR_V_ctrl);
+end
+
+fprintf('✓ Simulation Complete.\n\n');
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% CUSTOM METRICS CALCULATION
+%% ════════════════════════════════════════════════════════════════════════════
+
+% Settling Time (when error becomes < 2% of max and stays there)
+error_threshold = 0.1; % 0.1 degree threshold
+settling_idx = find(Log.Incidence < error_threshold, 1);
+if isempty(settling_idx)
+    settling_time = duration_sec;
+else
+    settling_time = Log.Time(settling_idx);
+end
+
+% Rise Time (first time reaching 90% of final stable error)
+final_error = mean(Log.Incidence(max(1, end-100):end));
+rise_threshold = final_error + 0.9 * (max(Log.Incidence) - final_error);
+rise_idx = find(Log.Incidence <= rise_threshold, 1);
+if isempty(rise_idx)
+    rise_time = duration_sec;
+else
+    rise_time = Log.Time(rise_idx);
+end
+
+% Overshoot (maximum error above final steady state)
+if final_error > 0
+    overshoot_pct = ((max(Log.Incidence) - final_error) / final_error) * 100;
+else
+    overshoot_pct = 0;
+end
+
+% Steady-State Error (last 10% of simulation)
+steady_state_start = max(1, round(0.9 * length(Log.Incidence)));
+steady_state_error = mean(Log.Incidence(steady_state_start:end));
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% PERFORMANCE SUMMARY
+%% ════════════════════════════════════════════════════════════════════════════
+
+fprintf('\n════════════════════════════════════════════════════════════════\n');
+fprintf('                    PERFORMANCE SUMMARY\n');
+fprintf('════════════════════════════════════════════════════════════════\n\n');
+
+tracking_error_mean = mean(Log.Incidence);
+tracking_error_max = max(Log.Incidence);
+if length(Log.Incidence) > 100
+    tracking_error_final = mean(Log.Incidence(end-100:end));
+else
+    tracking_error_final = mean(Log.Incidence);
+end
+
+lock_time = sum(Log.IsLocked) * dt_physics;
+lock_percentage = (lock_time / duration_sec) * 100;
+
+fprintf('┌─ TRACKING ACCURACY ─────────────────────────────────────────┐\n');
+fprintf('│ Mean error:       %.3f deg\n', tracking_error_mean);
+fprintf('│ Max error:        %.3f deg\n', tracking_error_max);
+fprintf('│ Final error:      %.3f deg\n', tracking_error_final);
+fprintf('└─────────────────────────────────────────────────────────────┘\n\n');
+
+max_vel_pan = max(Log.ServoVelPan);
+max_vel_tilt = max(Log.ServoVelTilt);
+
+fprintf('┌─ SERVO PERFORMANCE ─────────────────────────────────────────┐\n');
+fprintf('│ Max Pan velocity:  %.1f deg/s\n', max_vel_pan);
+fprintf('│ Max Tilt velocity: %.1f deg/s\n', max_vel_tilt);
+fprintf('│ Speed limit:       %.1f deg/s\n', ServoProps.MaxSpeed);
+fprintf('└─────────────────────────────────────────────────────────────┘\n\n');
+
+fprintf('┌─ LOCK PERFORMANCE ──────────────────────────────────────────┐\n');
+fprintf('│ Time locked:      %.1f s (%.1f%%)\n', lock_time, lock_percentage);
+fprintf('│ Lock threshold:    %.1f deg\n', PID_Params.lock_threshold);
+fprintf('└─────────────────────────────────────────────────────────────┘\n\n');
+
+fprintf('┌─ ADVANCED METRICS ──────────────────────────────────────────┐\n');
+fprintf('│ Settling time:    %.2f s (error < 0.1°)\n', settling_time);
+fprintf('│ Rise time:        %.2f s (reach 90%% of final)\n', rise_time);
+fprintf('│ Overshoot:        %.1f%% above steady-state\n', overshoot_pct);
+fprintf('│ Steady-state err: %.4f deg (last 10%% of test)\n', steady_state_error);
+fprintf('└─────────────────────────────────────────────────────────────┘\n\n');
+
+power_instant = Log.I_Pan(:) .* SUPPLY_VOLTAGE;
+total_energy = sum(power_instant) * dt_physics / 3600;
+avg_power = mean(power_instant(power_instant > 0.001));
+max_power = max(power_instant);
+
+fprintf('┌─ ENERGY CONSUMPTION ────────────────────────────────────────┐\n');
+fprintf('│ Total energy:     %.4f Wh\n', total_energy);
+fprintf('│ Average power:    %.2f W\n', avg_power);
+fprintf('│ Peak power:       %.2f W\n', max_power);
+fprintf('└─────────────────────────────────────────────────────────────┘\n\n');
+
+fprintf('════════════════════════════════════════════════════════════════\n\n');
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% ANALYSIS PLOTS (ALL 6 FIGURES FROM MAIN_SIMULATION.m)
+%% ════════════════════════════════════════════════════════════════════════════
+
+fprintf('Generating plots...\n\n');
+
+% Create results directory
+results_dir = 'Results';
+if ~isfolder(results_dir)
+    mkdir(results_dir);
+end
+timestamp = datestr(now, 'yyyy-mm-dd_HH-MM-SS');
+scenario_dir = fullfile(results_dir, sprintf('%s_%s', SCENARIO, timestamp));
+mkdir(scenario_dir);
+
+%% FIGURE 1: System Performance
+figure('Name', 'System Performance', 'Position', [100 50 1200 900]);
+
+subplot(4,1,1); hold on;
+plot(Log.Time/3600, Log.TargetPan, 'b--', 'LineWidth', 1.2, 'DisplayName', 'Target');
+plot(Log.Time/3600, Log.ActualPan, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Actual');
+area(Log.Time/3600, Log.IsFlip * 360, -360, 'FaceColor', 'y', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+title('Pan Axis Tracking', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); ylabel('Angle (deg)'); grid on; ylim([-200 200]);
+
+subplot(4,1,2); hold on;
+plot(Log.Time/3600, Log.TargetTilt, 'b--', 'LineWidth', 1.2, 'DisplayName', 'Target');
+plot(Log.Time/3600, Log.ActualTilt, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Actual');
+title('Tilt Axis Tracking', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); ylabel('Angle (deg)'); grid on;
+
+subplot(4,1,3); hold on;
+plot(Log.Time/3600, Log.TargetPan - Log.ActualPan, 'm', 'LineWidth', 1.5, 'DisplayName', 'Pan Error');
+plot(Log.Time/3600, Log.TargetTilt - Log.ActualTilt, 'c', 'LineWidth', 1.5, 'DisplayName', 'Tilt Error');
+yline(0, 'k--', 'LineWidth', 0.5);
+title('Tracking Error', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); ylabel('Error (deg)'); grid on;
+
+subplot(4,1,4);
+plot(Log.Time/3600, Log.Incidence, 'k-', 'LineWidth', 1.5);
+yline(1.0, 'r--', 'Target (1.0°)', 'LineWidth', 1.5);
+yline(0.5, 'g--', 'Excellent (0.5°)', 'LineWidth', 1.5);
+title('Incidence Angle', 'FontSize', 12, 'FontWeight', 'bold');
+xlabel('Time (hours)'); ylabel('θ_{inc} (deg)'); grid on;
+
+% Save Figure 1 (PNG)
+saveas(gcf, fullfile(scenario_dir, '01_System_Performance.png'));
+
+%% FIGURE 2: LDR Sensor Analysis
+figure('Name', 'LDR Sensor Analysis', 'Position', [150 30 1200 900]);
+
+subplot(4,1,1); hold on;
+plot(Log.Time/3600, Log.LDR_Voltage(:,1), 'r-', 'LineWidth', 1.2, 'DisplayName', 'Right');
+plot(Log.Time/3600, Log.LDR_Voltage(:,2), 'b-', 'LineWidth', 1.2, 'DisplayName', 'Left');
+plot(Log.Time/3600, Log.LDR_Voltage(:,3), 'g-', 'LineWidth', 1.2, 'DisplayName', 'Up');
+plot(Log.Time/3600, Log.LDR_Voltage(:,4), 'm-', 'LineWidth', 1.2, 'DisplayName', 'Down');
+title('LDR Voltage Outputs (GL5528 Sensors)', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); ylabel('Voltage (V)'); ylim([0 5.5]); grid on;
+
+subplot(4,1,2); hold on;
+plot(Log.Time/3600, Log.E_norm_Pan, 'r-', 'LineWidth', 1.5, 'DisplayName', 'E_{norm,Pan}');
+plot(Log.Time/3600, Log.E_norm_Tilt, 'b-', 'LineWidth', 1.5, 'DisplayName', 'E_{norm,Tilt}');
+yline(0, 'k--', 'LineWidth', 0.5); yline(0.05, 'g:', 'Deadzone', 'LineWidth', 1); yline(-0.05, 'g:', 'LineWidth', 1);
+title('Normalized Error Index', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); ylabel('E_{norm} [-1, +1]'); ylim([-1.1 1.1]); grid on;
+
+subplot(4,1,3); hold on;
+plot(Log.Time/3600, Log.E_deg_Pan, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Pan Error');
+plot(Log.Time/3600, Log.E_deg_Tilt, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Tilt Error');
+yline(0, 'k--', 'LineWidth', 0.5); yline(0.5, 'g:', 'Deadzone (0.5°)', 'LineWidth', 1); yline(-0.5, 'g:', 'LineWidth', 1);
+title('Angular Error from LDR', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); ylabel('Angle (deg)'); grid on;
+
+subplot(4,1,4); hold on;
+yyaxis left;
+plot(Log.Time/3600, Log.Incidence, 'k-', 'LineWidth', 1.5);
+yline(0.5, 'g--', 'Lock Threshold (0.5°)', 'LineWidth', 1.5);
+yline(1.0, 'r--', 'Target (1.0°)', 'LineWidth', 1.5);
+ylabel('\theta_{inc} (deg)'); ylim([0 max(90, max(Log.Incidence)*1.1)]);
+yyaxis right;
+area(Log.Time/3600, Log.IsLocked, 'FaceColor', 'g', 'FaceAlpha', 0.3, 'EdgeColor', 'none');
+ylabel('Lock Status'); yticks([0 1]); yticklabels({'Searching', 'LOCKED'}); ylim([-0.1 1.5]);
+title('Tracking Accuracy: Incidence with Lock Status', 'FontSize', 12, 'FontWeight', 'bold');
+xlabel('Time (hours)'); grid on;
+
+% Save Figure 2 (PNG)
+saveas(gcf, fullfile(scenario_dir, '02_LDR_Sensor_Analysis.png'));
+
+%% FIGURE 3: Controller Analysis (PI or FLC)
+if strcmp(CONTROL_MODE, 'fuzzy')
+    figure('Name', 'FLC Fuzzy Logic Analysis', 'Position', [200 10 1200 900]);
+    
+    subplot(3,2,1); hold on;
+    plot(Log.Time/3600, Log.FLC_Vel_Pan, 'r-', 'LineWidth', 1.5);
+    yline(0, 'k--', 'LineWidth', 0.5);
+    title('FLC Velocity Command (Pan)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('Vel (deg/s)'); grid on;
+    
+    subplot(3,2,2); hold on;
+    plot(Log.Time/3600, Log.FLC_Vel_Tilt, 'b-', 'LineWidth', 1.5);
+    yline(0, 'k--', 'LineWidth', 0.5);
+    title('FLC Velocity Command (Tilt)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('Vel (deg/s)'); grid on;
+    
+    subplot(3,2,3); hold on;
+    plot(Log.Time/3600, Log.FLC_Rate_Pan, 'r-', 'LineWidth', 1.5);
+    yline(0, 'k--', 'LineWidth', 0.5);
+    title('Error Rate dE/dt (Pan)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('Rate (deg/s)'); grid on;
+    
+    subplot(3,2,4); hold on;
+    plot(Log.Time/3600, Log.FLC_Rate_Tilt, 'b-', 'LineWidth', 1.5);
+    yline(0, 'k--', 'LineWidth', 0.5);
+    title('Error Rate dE/dt (Tilt)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('Rate (deg/s)'); grid on;
+    
+    subplot(3,2,5); hold on;
+    plot(Log.Time/3600, Log.E_deg_Pan, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Error');
+    plot(Log.Time/3600, Log.FLC_Vel_Pan, 'r--', 'LineWidth', 1, 'DisplayName', 'FLC Vel');
+    yline(0, 'k--', 'LineWidth', 0.5);
+    title('Error vs FLC Output (Pan)', 'FontSize', 11, 'FontWeight', 'bold');
+    legend('Location', 'best'); ylabel('deg / deg/s'); xlabel('Time (hours)'); grid on;
+    
+    subplot(3,2,6); hold on;
+    plot(Log.Time/3600, Log.E_deg_Tilt, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Error');
+    plot(Log.Time/3600, Log.FLC_Vel_Tilt, 'b--', 'LineWidth', 1, 'DisplayName', 'FLC Vel');
+    yline(0, 'k--', 'LineWidth', 0.5);
+    title('Error vs FLC Output (Tilt)', 'FontSize', 11, 'FontWeight', 'bold');
+    legend('Location', 'best'); ylabel('deg / deg/s'); xlabel('Time (hours)'); grid on;
+    
+    sgtitle('Fuzzy Logic Controller Analysis (Mamdani 7-MF)', 'FontSize', 14, 'FontWeight', 'bold');
+else
+    figure('Name', 'PID Control Analysis', 'Position', [200 10 1200 900]);
+    
+    subplot(3,2,1); hold on;
+    plot(Log.Time/3600, Log.PID_P_Pan, 'r-', 'LineWidth', 1.5);
+    title('P Term (Pan)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('P'); grid on;
+    
+    subplot(3,2,2); hold on;
+    plot(Log.Time/3600, Log.PID_P_Tilt, 'b-', 'LineWidth', 1.5);
+    title('P Term (Tilt)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('P'); grid on;
+    
+    subplot(3,2,3); hold on;
+    plot(Log.Time/3600, Log.PID_I_Pan, 'r-', 'LineWidth', 1.5);
+    yline(PID_Params.max_integral, 'k--'); yline(-PID_Params.max_integral, 'k--');
+    title('I Term (Pan)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('I'); grid on;
+    
+    subplot(3,2,4); hold on;
+    plot(Log.Time/3600, Log.PID_I_Tilt, 'b-', 'LineWidth', 1.5);
+    yline(PID_Params.max_integral, 'k--'); yline(-PID_Params.max_integral, 'k--');
+    title('I Term (Tilt)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('I'); grid on;
+    
+    subplot(3,2,5); hold on;
+    plot(Log.Time/3600, Log.Servo_Velocity_Pan, 'r-', 'LineWidth', 1.5);
+    title('Servo Velocity (Pan)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('°/s'); xlabel('Time (hours)'); grid on;
+    
+    subplot(3,2,6); hold on;
+    plot(Log.Time/3600, Log.Servo_Velocity_Tilt, 'b-', 'LineWidth', 1.5);
+    title('Servo Velocity (Tilt)', 'FontSize', 11, 'FontWeight', 'bold'); ylabel('°/s'); xlabel('Time (hours)'); grid on;
+    
+    sgtitle('PID Control Terms Analysis', 'FontSize', 14, 'FontWeight', 'bold');
+end
+
+% Save Figure 3 (PNG)
+saveas(gcf, fullfile(scenario_dir, '03_Controller_Analysis.png'));
+
+%% FIGURE 4: FSM State Analysis
+figure('Name', 'FSM State Machine', 'Position', [250 0 1200 600]);
+
+subplot(2,1,1); hold on;
+mode_numeric = zeros(num_steps, 1);
+for i = 1:num_steps
+    if isempty(Log.FSM_Mode{i}), mode_numeric(i) = 0; continue; end
+    switch Log.FSM_Mode{i}
+        case 'IDLE', mode_numeric(i) = 0;
+        case 'TRACKING', mode_numeric(i) = 1;
+        case 'SEARCH', mode_numeric(i) = 2;
+        case 'SAFETY', mode_numeric(i) = 3;
+        otherwise, mode_numeric(i) = -1;
+    end
+end
+area(Log.Time/3600, mode_numeric, 'FaceAlpha', 0.5);
+yticks([0 1 2 3]); yticklabels({'IDLE', 'TRACKING', 'SEARCH', 'SAFETY'}); ylim([-0.5 3.5]);
+title('FSM State Over Time', 'FontSize', 12, 'FontWeight', 'bold'); ylabel('Mode'); grid on;
+
+% Save Figure 4 (PNG)
+saveas(gcf, fullfile(scenario_dir, '04_FSM_State_Machine.png'));
+
+subplot(2,1,2); hold on;
+plot(Log.Time/3600, Log.V_Total, 'k-', 'LineWidth', 1.5);
+yline(PID_Params.night_threshold, 'b--', sprintf('Night (%.1fV)', PID_Params.night_threshold));
+yline(PID_Params.sun_lost_threshold, 'r--', sprintf('Lost (%.1fV)', PID_Params.sun_lost_threshold));
+yline(PID_Params.sun_found_threshold, 'g--', sprintf('Found (%.1fV)', PID_Params.sun_found_threshold));
+title('Total LDR Voltage (FSM Decision Variable)', 'FontSize', 12, 'FontWeight', 'bold');
+ylabel('V_{total} (V)'); xlabel('Time (hours)'); grid on;
+
+%% FIGURE 5: Energy Analysis
+figure('Name', 'Energy Analysis', 'Position', [300 50 1200 900]);
+
+power_instant = Log.I_Pan(:) .* SUPPLY_VOLTAGE;
+energy_cumulative = cumsum(power_instant) * dt_physics / 3600;
+
+subplot(3,1,1); hold on;
+area(Log.Time/3600, power_instant, 'FaceColor', 'b', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'LineWidth', 1.5);
+avg_pwr = mean(power_instant);
+yline(avg_pwr, 'r--', sprintf('Avg: %.2f W', avg_pwr), 'LineWidth', 2);
+title('Instantaneous Power Consumption', 'FontSize', 12, 'FontWeight', 'bold');
+ylabel('Power (W)'); grid on;
+
+subplot(3,1,2); hold on;
+area(Log.Time/3600, energy_cumulative, 'FaceColor', 'b', 'FaceAlpha', 0.3, 'EdgeColor', 'k', 'LineWidth', 1.5);
+title('Cumulative Energy', 'FontSize', 12, 'FontWeight', 'bold');
+ylabel('Energy (Wh)'); grid on;
+
+% Save Figure 5 before next subplot
+saveas(gcf, fullfile(scenario_dir, '05_Energy_Analysis.png'));
+
+subplot(3,1,3); hold on;
+vel_total = Log.ServoVelPan + Log.ServoVelTilt;
+vel_total(vel_total < 0.001) = 1;
+pan_fraction = Log.ServoVelPan ./ vel_total;
+tilt_fraction = Log.ServoVelTilt ./ vel_total;
+power_pan = power_instant .* pan_fraction;
+power_tilt = power_instant .* tilt_fraction;
+area(Log.Time/3600, power_pan, 'FaceColor', 'r', 'FaceAlpha', 0.6, 'DisplayName', 'Pan');
+area(Log.Time/3600, power_tilt, 'FaceColor', 'b', 'FaceAlpha', 0.6, 'DisplayName', 'Tilt');
+title('Power Distribution (Pan vs Tilt)', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); xlabel('Time (hours)'); ylabel('Power (W)'); grid on;
+
+%% FIGURE 6: Motor Control & Trajectory
+figure('Name', 'Motor Control & Trajectory', 'Position', [350 100 1200 900]);
+
+subplot(3,1,1); hold on;
+yyaxis left;
+plot(Log.Time/3600, Log.I_Pan, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Servo Current');
+ylabel('Current (A)', 'Color', 'r');
+yyaxis right;
+plot(Log.Time/3600, abs(Log.E_deg_Pan), 'b-', 'LineWidth', 1.5, 'DisplayName', 'Pan Error');
+ylabel('Error (deg)', 'Color', 'b');
+title('CLOSED-LOOP: Servo Current vs Pan Error', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); grid on; xlabel('Time (hours)');
+
+subplot(3,1,2); hold on;
+plot(Log.Time/3600, Log.ServoVelPan, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Pan Velocity');
+plot(Log.Time/3600, Log.ServoVelTilt, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Tilt Velocity');
+yline(ServoProps.MaxSpeed, 'k--', sprintf('Max: %.0f °/s', ServoProps.MaxSpeed), 'LineWidth', 1.5);
+title('Servo Motor Velocities', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'best'); ylabel('Velocity (deg/s)'); grid on;
+
+subplot(3,1,3); hold on;
+if ~isempty(FlipLog.times) && length(FlipLog.azimuth_sun) > 1
+    plot(FlipLog.times/3600, FlipLog.azimuth_sun, 'y-', 'LineWidth', 1.5, 'DisplayName', 'Sun Azimuth');
+    plot(FlipLog.times/3600, FlipLog.elevation_sun, 'c-', 'LineWidth', 1.5, 'DisplayName', 'Sun Elevation');
+    plot(FlipLog.times/3600, 90 - FlipLog.target_pan_final, 'r--', 'LineWidth', 1, 'DisplayName', 'Target Pan');
+    plot(FlipLog.times/3600, 90 - FlipLog.target_tilt_final, 'b--', 'LineWidth', 1, 'DisplayName', 'Target Tilt');
+    legend('Location', 'best');
+else
+    text(0.5, 0.5, 'Insufficient tracking data', 'HorizontalAlignment', 'center', 'Units', 'normalized');
+end
+title('Sun Position Trajectory', 'FontSize', 12, 'FontWeight', 'bold');
+ylabel('Angle (deg)'); xlabel('Time (hours)'); grid on;
+
+% Save Figure 6 (PNG)
+saveas(gcf, fullfile(scenario_dir, '06_Motor_Control_Trajectory.png'));
+
+%% FIGURE 7: Energy Balance Analysis
+figure('Name', 'Energy Balance', 'Position', [400 150 1200 900]);
+
+% Calculate cumulative energy
+power_instant = Log.Power_Total(:);
+cumul_energy_used = cumsum(power_instant) * dt_physics / 3600;  % Wh
+
+solar_power_instant = Log.SolarPower(:);
+cumul_energy_available = cumsum(solar_power_instant) * dt_physics / 3600;  % Wh
+
+efficiency_over_time = (cumul_energy_used ./ (cumul_energy_available + 1e-6)) * 100;
+energy_balance = cumul_energy_available - cumul_energy_used;  % Net energy
+
+subplot(3,1,1);
+hold on;
+area(Log.Time/3600, cumul_energy_available, 'FaceColor', 'y', 'FaceAlpha', 0.4, 'EdgeColor', [1 0.5 0], 'LineWidth', 2);
+area(Log.Time/3600, cumul_energy_used, 'FaceColor', 'r', 'FaceAlpha', 0.4, 'EdgeColor', 'r', 'LineWidth', 2);
+legend('Available Solar Energy', 'Used Energy', 'Location', 'best');
+title('Cumulative Energy: Available vs Used', 'FontSize', 12, 'FontWeight', 'bold');
+ylabel('Cumulative Energy (Wh)'); grid on;
+
+subplot(3,1,2);
+hold on;
+plot(Log.Time/3600, solar_power_instant, 'Color', [1 0.5 0], 'LineWidth', 1.5);
+plot(Log.Time/3600, power_instant, 'r-', 'LineWidth', 1.5);
+legend('Solar Power Available', 'Power Used (Motors)', 'Location', 'best');
+title('Instantaneous Power: Available vs Used', 'FontSize', 12, 'FontWeight', 'bold');
+ylabel('Power (W)'); grid on;
+
+subplot(3,1,3);
+hold on;
+yyaxis left;
+plot(Log.Time/3600, energy_balance, 'g-', 'LineWidth', 2);
+yline(0, 'k--', 'LineWidth', 1);
+ylabel('Energy Balance (Wh)'); 
+yyaxis right;
+plot(Log.Time/3600, efficiency_over_time, 'b-', 'LineWidth', 1.5);
+yline(100, 'r--', '100%', 'LineWidth', 1);
+ylabel('System Efficiency (%)'); 
+title('Energy Balance & System Efficiency', 'FontSize', 12, 'FontWeight', 'bold');
+xlabel('Time (hours)'); grid on;
+
+% Save Figure 7 (PNG)
+try
+    saveas(gcf, fullfile(scenario_dir, '07_Energy_Balance.png'));
+catch
+    fprintf('Warning: Could not save Figure 7 as PNG\n');
+end
+
+fprintf('\n✓ All 7 plots generated and saved!\n');
+fprintf('✓ Location: %s\n\n', scenario_dir);
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% CSV EXPORT & REPORT GENERATION
+%% ════════════════════════════════════════════════════════════════════════════
+
+% Save CSV manually (simpler approach to avoid table row mismatch)
+csv_filename = fullfile(scenario_dir, 'simulation_log.csv');
+fid_csv = fopen(csv_filename, 'w');
+fprintf(fid_csv, 'Time_sec,Pan_Actual_deg,Pan_Target_deg,Pan_Error_deg,Tilt_Actual_deg,Tilt_Target_deg,Tilt_Error_deg,Incidence_deg,IsLocked,LDR_Right_V,LDR_Left_V,LDR_Up_V,LDR_Down_V,Current_Pan_A,Current_Tilt_A,Velocity_Pan_dps,Velocity_Tilt_dps,Power_Pan_W,Power_Tilt_W,Power_Total_W\n');
+for i = 1:min(length(Log.Time), 10000) % Limit to 10k rows for CSV (to keep file manageable)
+    fprintf(fid_csv, '%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n', ...
+        Log.Time(i), Log.ActualPan(i), Log.TargetPan(i), Log.TargetPan(i)-Log.ActualPan(i), ...
+        Log.ActualTilt(i), Log.TargetTilt(i), Log.TargetTilt(i)-Log.ActualTilt(i), ...
+        Log.Incidence(i), Log.IsLocked(i), ...
+        Log.LDR_Voltage(i,1), Log.LDR_Voltage(i,2), Log.LDR_Voltage(i,3), Log.LDR_Voltage(i,4), ...
+        Log.I_Pan(i), Log.I_Tilt(i), ...
+        Log.ServoVelPan(i), Log.ServoVelTilt(i), ...
+        Log.Power_Pan(i), Log.Power_Tilt(i), Log.Power_Total(i));
+end
+fclose(fid_csv);
+fprintf('✓ CSV log saved: %s (%d rows)\n', csv_filename, min(length(Log.Time), 10000));
+
+% Generate automatic report
+report_filename = fullfile(scenario_dir, 'REPORT.txt');
+fid = fopen(report_filename, 'w');
+
+fprintf(fid, '═══════════════════════════════════════════════════════════════\n');
+fprintf(fid, '           SOLAR TRACKER SIMULATION REPORT\n');
+fprintf(fid, '═══════════════════════════════════════════════════════════════\n\n');
+
+fprintf(fid, 'TEST PARAMETERS\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Scenario:           %s\n', SCENARIO);
+fprintf(fid, 'Control Mode:       %s\n', CONTROL_MODE);
+fprintf(fid, 'Duration:           %.0f seconds (%.2f minutes)\n', duration_sec, duration_sec/60);
+fprintf(fid, 'Sun Motion Speed:   %.4f °/s\n', spiral_speed);
+fprintf(fid, 'Sampling Rate:      %.0f Hz (dt=%.3f s)\n', 1/dt_physics, dt_physics);
+fprintf(fid, 'Total Data Points:  %d\n\n', num_steps);
+
+fprintf(fid, 'TRACKING ACCURACY\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Mean Incidence Error:     %.4f deg\n', tracking_error_mean);
+fprintf(fid, 'Max Incidence Error:      %.4f deg\n', tracking_error_max);
+fprintf(fid, 'Final (Steady-State):     %.4f deg\n', tracking_error_final);
+fprintf(fid, 'Lock Percentage:          %.2f%%\n\n', lock_percentage);
+
+fprintf(fid, 'ADVANCED METRICS\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Settling Time:            %.2f seconds\n', settling_time);
+fprintf(fid, 'Rise Time (90%%):          %.2f seconds\n', rise_time);
+fprintf(fid, 'Overshoot:                %.2f%%\n', overshoot_pct);
+fprintf(fid, 'Steady-State Error:       %.4f deg\n\n', steady_state_error);
+
+fprintf(fid, 'SERVO PERFORMANCE\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Max Pan Velocity:         %.2f °/s\n', max_vel_pan);
+fprintf(fid, 'Max Tilt Velocity:        %.2f °/s\n', max_vel_tilt);
+fprintf(fid, 'Servo Speed Limit:        %.2f °/s\n\n', ServoProps.MaxSpeed);
+
+fprintf(fid, 'ENERGY CONSUMPTION\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Total Energy:             %.4f Wh\n', total_energy);
+fprintf(fid, 'Average Power:            %.2f W\n', avg_power);
+fprintf(fid, 'Peak Power:               %.2f W\n\n', max_power);
+
+% Calculate solar energy metrics
+cumul_energy_available = sum(Log.SolarPower) * dt_physics / 3600;
+cumul_energy_used = total_energy;
+energy_balance = cumul_energy_available - cumul_energy_used;
+solar_efficiency = (cumul_energy_used / (cumul_energy_available + 1e-6)) * 100;
+
+fprintf(fid, 'ENERGY BALANCE (Solar Panel 0.05m² @ 15%% efficiency)\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Total Available Solar:    %.4f Wh\n', cumul_energy_available);
+fprintf(fid, 'Total Used by Motors:     %.4f Wh\n', cumul_energy_used);
+fprintf(fid, 'Net Energy Balance:       %.4f Wh\n', energy_balance);
+fprintf(fid, 'System Efficiency:        %.2f%%\n', solar_efficiency);
+if energy_balance >= 0
+    fprintf(fid, 'Status:                   ✓ SURPLUS (solar > motors)\n\n');
+else
+    fprintf(fid, 'Status:                   ✗ DEFICIT (motors > solar)\n\n');
+end
+
+fprintf(fid, 'PID PARAMETERS\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Proportional Gain (Kp):   %.4f\n', PID_Params.Kp_vel);
+fprintf(fid, 'Integral Gain (Ki):       %.4f\n', PID_Params.Ki_vel);
+fprintf(fid, 'Max Integral:             %.2f\n\n', PID_Params.max_integral);
+
+fprintf(fid, 'FSM THRESHOLDS\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, 'Night Threshold:          %.2f V\n', PID_Params.night_threshold);
+fprintf(fid, 'Sun Lost Threshold:       %.2f V\n', PID_Params.sun_lost_threshold);
+fprintf(fid, 'Sun Found Threshold:      %.2f V\n', PID_Params.sun_found_threshold);
+fprintf(fid, 'Lock Threshold:           %.2f deg\n\n', PID_Params.lock_threshold);
+
+fprintf(fid, 'GENERATED FILES\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────\n');
+fprintf(fid, '01_System_Performance.png\n');
+fprintf(fid, '02_LDR_Sensor_Analysis.png\n');
+fprintf(fid, '03_PID_Control_Analysis.png\n');
+fprintf(fid, '04_FSM_State_Machine.png\n');
+fprintf(fid, '05_Energy_Analysis.png\n');
+fprintf(fid, '06_Motor_Control_Trajectory.png\n');
+fprintf(fid, '07_Energy_Balance.png ⭐ NEW: Available vs Used Solar Energy\n');
+fprintf(fid, 'simulation_log.csv\n');
+fprintf(fid, 'REPORT.txt\n\n');
+
+fprintf(fid, '═══════════════════════════════════════════════════════════════\n');
+fprintf(fid, 'Report generated: %s\n', datetime('now'));
+fprintf(fid, '═══════════════════════════════════════════════════════════════\n');
+
+fclose(fid);
+fprintf('✓ Report saved: %s\n\n', report_filename);
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% HELPER FUNCTIONS
+%% ════════════════════════════════════════════════════════════════════════════
+
+function [azimuth, elevation] = cartesian2spherical(S_vec)
+    x = S_vec(1); y = S_vec(2); z = S_vec(3);
+    norm_vec = norm(S_vec);
+    if norm_vec > 0
+        x = x / norm_vec; y = y / norm_vec; z = z / norm_vec;
+    end
+    azimuth = atan2d(y, x);
+    if azimuth < 0, azimuth = azimuth + 360; end
+    elevation = asind(z);
+end
+
+function [adjusted_pan, adjusted_tilt, is_flip, is_reachable] = applyFlipLogic(ideal_pan, ideal_tilt, limits)
+    pan_lim = limits.Pan; tilt_lim = limits.Tilt;
+    
+    if (abs(ideal_pan) <= pan_lim) && (abs(ideal_tilt) <= tilt_lim)
+        adjusted_pan = ideal_pan; adjusted_tilt = ideal_tilt;
+        is_flip = false; is_reachable = true; return;
+    end
+    
+    flip_pan = ideal_pan + 180;
+    if flip_pan > 180, flip_pan = flip_pan - 360; end
+    flip_tilt = -ideal_tilt;
+    
+    if (abs(flip_pan) <= pan_lim) && (flip_tilt >= -90) && (flip_tilt <= 90)
+        adjusted_pan = flip_pan; adjusted_tilt = flip_tilt;
+        is_flip = true; is_reachable = true; return;
+    end
+    
+    adjusted_pan = max(-pan_lim, min(pan_lim, ideal_pan));
+    adjusted_tilt = max(-tilt_lim, min(tilt_lim, ideal_tilt));
+    is_flip = false; is_reachable = false;
+end
+
+function result = ternary(condition, true_val, false_val)
+    if condition, result = true_val; else, result = false_val; end
+end
+
+function value = getFieldOrDefault_main(s, field, default)
+    if isfield(s, field)
+        value = s.(field);
+    else
+        value = default;
+    end
+end
