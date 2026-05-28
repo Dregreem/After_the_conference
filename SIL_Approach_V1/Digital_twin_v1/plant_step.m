@@ -47,8 +47,8 @@ function [ldr_adc, P_panel, V_panel, I_panel, P_mppt, P_bus, ...
     E_motor_tilt   = next_tilt.Energy;
 
     %% (3) Hizasizlik
-    mis_pan  = sun_az - panel_pan;
-    mis_tilt = sun_el - panel_tilt;
+    mis_pan  = sun_az - (180 + panel_pan);
+    mis_tilt = (90 - panel_tilt) - sun_el;
 
     %% (4) LDR sensoru
     ldr_v   = ldr_model(mis_pan, mis_tilt, GHI);

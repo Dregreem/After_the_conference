@@ -1,0 +1,860 @@
+%% ============================================================
+%% SDEWES 2026 CONFERENCE PAPER
+%% SUBJECT: DUAL-AXIS petal form SOLAR TRACKER
+%% ============================================================
+
+%% Resmi Elsevier makale sınıfı (3p seçeneği ile ferah ve şık bir görünüm sağlar)
+\documentclass[preprint,3p,12pt]{elsarticle}
+
+%% ── ENCODING & FONT ──────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+%% Eski mathptmx satırını tamamen silip, modern newtx paketlerini ekliyoruz:
+\usepackage{newtxtext, newtxmath}
+
+%% ── MATH & SYMBOLS ───────────────────────────────────────────
+\usepackage{amsmath, bm}
+
+%% ── FIGURES & TABLES ─────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage[table]{xcolor}
+\usepackage{siunitx}
+\usepackage{float}
+
+
+%% Overfull hbox toleransini artir (itemize icindeki uzun satirlar icin)
+\setlength{\emergencystretch}{3em}
+
+%% ── HYPERREF ─────────────────────────────────────────────────
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl}   % URL'leri herhangi bir karakterden bölebilir
+%% FIX: \urlstyle{rm} → serif (Times) font, matches body text
+\urlstyle{same}
+%% elsarticle corref tokenlarini PDF metadata'dan gizle (hyperref warning fix)
+\pdfstringdefDisableCommands{%
+  \def\corref#1{}%
+  \def\cnotenum{}%
+  \def\ead#1{}%
+}
+
+%% ── CUSTOM MATH COMMANDS ─────────────────────────────────────
+\newcommand{\degr}{^{\circ}}
+\newcommand{\Svec}{\mathbf{S}}
+\newcommand{\Nvec}{\mathbf{N}}
+\newcommand{\thetapan}{\theta_{\mathrm{pan}}}
+\newcommand{\thetatilt}{\theta_{\mathrm{tilt}}}
+\newcommand{\thetainc}{\theta_{\mathrm{inc}}}
+\newcommand{\epan}{e_{\mathrm{pan}}}
+\newcommand{\etilt}{e_{\mathrm{tilt}}}
+\newcommand{\dt}{\Delta t}
+\journal{SDEWES 2026 Conference}
+
+%% ─────────────────────────────────────────────────────────────
+\begin{document}
+%% ─────────────────────────────────────────────────────────────
+
+\begin{frontmatter}
+
+\title{A petal form Dual-Axis Solar Tracker: Design, Performance,
+and Environmental Impact}
+
+\author{Kerem Bayer}
+
+\author{Berke Ogulcan Parlak}
+
+\author{Huseyin Ayhan Yavasoglu\corref{}}
+
+\cortext[cor1]{Corresponding author. Email address: hayhan@yildiz.edu.tr}
+
+\affiliation{organization={Department of Mechatronics Engineering,
+              Yildiz Technical University},
+              city={Istanbul},
+              country={Türkiye}}
+
+\begin{abstract}
+This paper presents the design, performance assessment, and
+environmental impact analysis of a deployable dual-axis petal form
+solar tracker intended for mobile photovoltaic applications. The
+system integrates a pan-tilt gimbal with self locking worm gears, a
+four petal deployable panel structure, and a pyramidal
+light dependent resistor array for reactive solar sensing. A
+four state finite state machine supervisor implementing a
+ duty cycling strategy governs actuator activation,
+while a velocity mode PI controller, optimised via multi-objective techniques, regulates both axes during active tracking. Performance is evaluated against a fixed panel baseline using PVGIS SARAH-3 typical meteorological year data for three climatically distinct locations in Türkiye: Antalya, Ankara, and Istanbul. In winter months, the tracker achieves net efficiency gains of up to 85.5\% relative to the fixed configuration; this strong performance extends to the annual horizon, where consistent net energy gains reach as high as 27\% across all three locations. On a per-unit-area basis,
+the tracker mitigates up to 38.8~kgCO$_2$-eq per square meter per
+year in source level grid emissions, confirming a direct coupling
+between local radiation quality and the environmental feasibility of
+active solar tracking.
+\end{abstract}
+
+\begin{keyword}
+Solar Tracking \sep Photovoltaic \sep Solar Energy \sep Energy Harvesting \sep Dual-Axis Mechanism
+\end{keyword}
+
+\end{frontmatter}
+
+%% ── SECTION 1: INTRODUCTION ──────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+
+The global expansion of photovoltaic (PV) capacity has renewed interest in active solar tracking as a strategy for maximising energy harvest without increasing the installed array footprint. Dual-axis trackers, which independently control azimuth and elevation, recover the full geometric advantage of normal solar incidence throughout the
+day and across seasons, with gross yield gains of 35--45\% reported for mid-latitude fixed installations under clear-sky conditions~\cite{Eke2012, Abdallah2004}.
+
+Despite this well-documented advantage, the majority of tracker evaluations in the literature assess performance based on gross irradiance capture alone, without deducting the electrical energy consumed by the tracking actuators. This omission systematically overstates the energetic benefit of tracking: the net yield can differ
+substantially from the gross yield when actuator duty cycling is not explicitly managed~\cite{Tan2021}. Existing comparative evaluations of dual-axis control strategies compound this issue by assessing controllers primarily on gross tracking error, often without reference to the respective energy costs incurred to achieve that precision~\cite{Ontiveros2020}.
+
+This study introduces a deployable, petal form dual-axis solar tracker tailored for mobile PV systems, governed by an energy-aware supervisory control strategy designed to eliminate quiescent actuation losses and evaluate true net PV yield under realistic meteorological conditions.
+The main contributions of this study are summarised as follows:
+
+\begin{itemize}
+    \item First, a reactive, location-agnostic kinematic
+    architecture is developed using a pyramidal light-dependent resistor
+    (LDR) array. Combined with a gimbal inverse resolution strategy,
+    the system achieves full upper-hemispherical coverage within
+    standard $\pm90\degr$ mechanical limits, bypassing the need for
+    GPS hardware or continuous ephemeris calculations.
+
+    \item Second, an energy-aware supervisory control
+    framework, featuring a velocity mode proportional-integral (PI)
+    controller managed by a move and sleep finite state machine (FSM),
+    is integrated with a dynamic electromechanical plant model. This
+    ensures quiescent baseline consumption is eliminated, while the
+    plant model precisely quantifies the remaining actuation energy to
+    evaluate the true net PV yield.
+
+    \item Third, the proposed system is geographically
+    benchmarked against a fixed-panel baseline using high-resolution
+    PVGIS Typical Meteorological Year (TMY) data across three
+    climatically distinct locations in Türkiye (Antalya, Ankara,
+    and Istanbul) to assess net yield viability across representative
+    climatic regimes~\cite{PVGIS2023}.
+\end{itemize}
+
+
+Following this introduction, the remainder of the paper is organised as follows. Section~\ref{sec:design} details the physical system architecture, the pyramidal LDR sensing logic, and the gimbal inverse kinematic mapping. Section~\ref{sec:energy_models} presents the theoretical background of the dynamic electromechanical plant and describes the mathematical models used for photovoltaic net yield assessment. Section~\ref{sec:control} outlines the supervisory control framework, including the move and sleep FSM and the velocity mode PI controller tuning. Section~\ref{sec:results} provides the simulation results and discussion, where the net yield of the tracker is geographically benchmarked against fixed-panel data. Finally, Section~\ref{sec:conclusion} summarises the main conclusions of the study and offers recommendations for future research.
+
+%% ── SECTION 2: SYSTEM ARCHITECTURE AND KINEMATICS ────────────
+\section{System Architecture and Mechanical Design}
+\label{sec:design}
+
+\subsection{petal form Mechanical Architecture}
+\label{sec:mech}
+
+The proposed tracker utilises a deployable petal form architecture wherein four photovoltaic panels (each of surface area $A$) articulate radially around a central two-axis gimbal at $90\degr$ intervals. In the deployed state, this configuration forms a symmetric capture array with a combined aperture area of $4A$. A dedicated DC motor drives a worm screw mechanism to deploy the panels from a vertically stacked stowed position. The inherent mechanical irreversibility of the worm-gear assembly provides passive structural locking, ensuring the panels remain securely folded during transit or nocturnal storage without requiring continuous electrical holding power~\cite{Shigley2011}.
+
+The deployment mechanism and the two-axis tracking gimbal are kinematically decoupled. The worm screw actuator manages panel articulation exclusively, whereas the gimbal governs optical pointing. Consequently, the gimbal is capable of tracking the sun continuously without physical interference from the deployment hardware. The system operates across three distinct macro states. In the Stowed state, the panels remain retracted with all actuators de-energised. Transitioning state involves a single event deployment, incurring an energy cost that is negligible relative to the daily operational budget. Finally, in the Deployed state, the panels are fully extended to enable active dual-axis solar tracking. The deployed physical configuration and the corresponding spatial coordinate frame are detailed in Fig.~\ref{fig:system}.
+
+\begin{figure}[!ht]
+    \centering
+    \begin{subfigure}[b]{0.40\columnwidth}
+        \centering
+        \includegraphics[width=\linewidth]{V3pan-tilt_1_small.JPG}
+        \caption{}
+        \label{subfig:a}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\columnwidth}
+        \centering
+        % Sadece resmi yukarı kaldırmak için \raisebox kullanıyoruz.
+        % 1.5cm değerini göz zevkine göre artırıp azaltabilirsin.
+        \raisebox{-0.5cm}{\includegraphics[width=\linewidth]{tikz_trials-1.pdf}}
+        \caption{}
+        \label{subfig:b}
+    \end{subfigure}
+    \caption{Petal form solar tracker: (a) deployed state highlighting major components; (b) ENU coordinate system and pan tilt rotation definitions.}
+    \label{fig:system}
+\end{figure}
+
+The tracking gimbal consists of two MG995R servomotors operating in a nested pan-tilt configuration. Both axes are mechanically constrained to a travel limit of $\pm90\degr$, establishing the upward zenith direction as the zero position. Actuator parameters, derived from the manufacturer's technical specifications~\cite{TowerPro}, are summarised in Table~\ref{tab:servo_params}. These parameters are utilised within the dynamic plant model to formulate a conservative, upper-bound estimation of parasitic energy consumption.
+
+\begin{table}[!ht]
+\centering
+\caption{MG995R Servo Parameters Used in the Electromechanical Plant Model}
+\label{tab:servo_params}
+\renewcommand{\arraystretch}{1.05}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llll@{\hspace{10pt}}llll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Unit} & &
+\textbf{Parameter} & \textbf{Value} & \textbf{Unit} \\
+\midrule
+$T_{\max}$           & 0.35               & N$\cdot$m            & &
+$I_{\mathrm{stall}}$ & 2.0                & A                    \\
+$J$                  & $1.5\times10^{-4}$ & kg$\cdot$m$^2$       & &
+$I_{\mathrm{nL}}$    & 0.17               & A                    \\
+$B$                  & 0.01               & N$\cdot$m$\cdot$s/rad& &
+$V_{\mathrm{cc}}$    & 6.0                & V                    \\
+$T_s$                & 0.02               & N$\cdot$m            & &
+$\omega_{\max}$      & 300                & deg/s                \\
+$T_k$                & 0.015              & N$\cdot$m            & &
+Travel range         & $\pm90$            & deg                  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Solar Ephemeris and Body Frame Representation}
+\label{sec:transform}
+
+All spatial quantities are expressed in the East-North-Up (ENU) local reference frame, with the $Z$-axis aligned with the local vertical~\cite{Duffie2013}. The gimbal zero position is defined as the upward zenith direction $\hat{\mathbf{z}} = [0,\,0,\,1]^\top$, at which both pan and tilt angles are zero and panel normals point directly overhead, serving as the default initialisation. The true solar unit vector $\Svec \in \mathbb{R}^3$ is evaluated continuously using the closed-form ephemeris of Duffie and Beckman~\cite{Duffie2013}:
+
+\begin{align}
+    \delta &= \arcsin\!\left(\sin 23.45\degr \sin\!\left[\frac{360}{365}(d - 81)\degr\right]\right), \nonumber \\
+    \alpha &= \arcsin\!\left(\sin\varphi\sin\delta + \cos\varphi\cos\delta\cos[15\degr(T_{\mathrm{solar}} - 12)]\right)
+    \label{eq:ephemeris}
+\end{align}
+
+where $\delta$ is the solar declination angle, $d$ is the day of the year ($1 \leq d \leq 365$), $\alpha$ is the solar elevation angle, $\varphi$ is the local latitude, and $T_{\mathrm{solar}}$ is the true solar time in hours.
+
+To map the solar trajectory to the tracker's local perspective, the gimbal body frame is derived via two sequential rotations: pan rotation $\thetapan$ about the vertical $Z$-axis, followed by tilt rotation $\thetatilt$ about the $X$-axis in the pan-rotated frame. Expanding the transformation $\Svec_{\mathrm{body}} = \mathbf{R}_x(\thetatilt)\,\mathbf{R}_z(\thetapan)\,\Svec$ yields the body frame solar components:
+
+\begin{equation}
+    S_{bx} = c_p S_x - s_p S_y, \quad
+    S_{by} = c_t(s_p S_x + c_p S_y) - s_t S_z, \quad
+    S_{bz} = s_t(s_p S_x + c_p S_y) + c_t S_z
+    \label{eq:body_transform}
+\end{equation}
+
+where $S_x, S_y, S_z$ are the respective East, North, and Up Cartesian components of the true solar unit vector $\Svec$, and the terms $c_p, s_p, c_t, s_t$ denote the cosines and sines of the pan ($\thetapan$) and tilt ($\thetatilt$) angles. $\thetainc$ denotes the solar incidence angle between the incoming beam and the panel normal; perfect tracking alignment ($\thetainc = 0\degr$) corresponds to $\Svec_{\mathrm{body}} = [0,\,0,\,1]^\top$, geometrically forcing the body axis vertical component to $S_{bz} = \cos\thetainc = 1$.
+
+\subsection{Pyramidal LDR Sensing Architecture and Error Extraction}
+\label{sec:ldr_model}
+
+The sensing apparatus comprises four GL5528 light-dependent resistors positioned on the lateral faces of a square pyramid at the apex of the gimbal mast. The sensor array is oriented along the cardinal body frame axes, corresponding to the positive and negative directions of the $X$ and $Y$ axes, and rotates rigidly with the gimbal. This configuration guarantees that the tracking error signal remains dynamically independent of the deployment state of the panels.
+
+The selection of a pyramidal topology over a standard co-planar configuration is motivated by two geometric considerations. First, the inclination of the sensor faces yields a monotonic and approximately linear relationship between face illuminance and pointing error, a property inherently absent in co-planar designs. Second, the spatial separation of the face outward normals reduces the mutual optical cross talk observed in co-planar quadrant sensors under diffuse illumination conditions. This design choice is motivated by the need to maintain a well conditioned error signal across the full range of solar elevations encountered in the climate zones of Türkiye under study.
+
+The incident illuminance $E_k$ on each pyramid face $k$ is evaluated as a five point spatial average of the solar projection. To account for self shading, the local irradiance contribution $I_{k,j}$ at a given sample point $j$ is geometrically defined by the dot product of the body frame solar vector and the local outward normal $\Nvec_{k,j}$:
+
+\begin{equation}
+    I_{k,j} = \begin{cases} 
+        \Svec_{\mathrm{body}} \cdot \Nvec_{k,j} & \text{if } \Svec_{\mathrm{body}} \cdot \Nvec_{k,j} > 0 \\
+        0 & \text{otherwise}
+    \end{cases}
+    \label{eq:irradiance_contribution}
+\end{equation}
+
+The effective face illuminance $E_k$ is then computed by averaging $I_{k,j}$ across the face centroid and four off-centre coordinates, thereby approximating the area weighted surface integral. Coupled with a $3\,\mathrm{k\Omega}$ voltage divider network, the sensor photoresistance generates a continuous face voltage $V_k$. The power-law resistance characteristic, the normalised differential tracking errors, and the analytical angular mapping $e_a$ for an individual axis are formulated collectively as~\cite{GL5528}:
+
+\begin{gather}
+    R_{\mathrm{LDR},k} = R_{10}\left(\frac{10}{E_k}\right)^{\gamma} \label{eq:resistance} \\[6pt]
+    \hat{e}_{\mathrm{pan}} = \frac{V_L - V_R}{V_L + V_R + \varepsilon}, \qquad \hat{e}_{\mathrm{tilt}} = \frac{V_U - V_D}{V_U + V_D + \varepsilon} \label{eq:ldr_signals} \\[6pt]
+    e_a = \arctan\!\left(\hat{e}_a \cdot \tan 60^\circ\right) \label{eq:angular_errors}
+\end{gather}
+
+where $V_L$, $V_R$, $V_U$, and $V_D$ are the face voltages of the left ($-X$), right ($+X$), upper ($+Y$), and lower ($-Y$) pyramid faces, respectively; $R_{10} = 10\,\mathrm{k\Omega}$ is the base resistance, $\gamma = 0.7$ denotes the characteristic slope, and $\varepsilon = 10^{-3}$ serves as a regularisation constant to prevent mathematical singularities under absolute zero irradiance. Normalising the voltage differential against the total axis output ensures that the control signal remains invariant to the absolute magnitude of solar irradiance, thereby providing operational robustness during intermittent cloud cover~\cite{Hafez2018}.
+
+To determine the total scalar pointing error $e_{\mathrm{total}}$, the geometric projection of the body frame solar vector onto the local zenith is evaluated and defined as $\zeta = \hat{\Svec}_{\mathrm{body}}\cdot\hat{\mathbf{z}}$. To ensure analytical stability and prevent domain errors during the arccosine evaluation due to numerical floating-point inaccuracies, a piecewise saturation function is applied:
+
+\begin{equation}
+    e_{\mathrm{total}} = \arccos(\zeta^{*}), \quad \text{where} \quad \zeta^{*} = \begin{cases}
+        1 & \text{if } \zeta > 1 \\
+        \zeta & \text{if } -1 \leq \zeta \leq 1 \\
+        -1 & \text{if } \zeta < -1
+    \end{cases}
+    \label{eq:e_total}
+\end{equation}
+
+The $120\degr$ full apex angle guarantees that at least two faces remain partially illuminated for any incident sun vector within the upper hemisphere. The supervisor relies exclusively on the scalar error $e_{\mathrm{total}}$ for all mode transition logic, thereby circumventing the near-zenith singularity inherent to Cartesian differential decomposition.
+
+\subsection{Gimbal Inverse Kinematic Mapping}
+\label{sec:inverse_math}
+
+The mechanical travel limit of $\pm90\degr$ on the pan axis restricts direct actuation to a $180\degr$ azimuthal sector. Because the summer solar trajectory at mid-latitudes frequently exceeds a $180\degr$ sweep, a traditional pan-tilt gimbal inevitably loses solar lock. To circumvent this hardware constraint without introducing slip-ring complexities, a gimbal inverse mapping is executed in instances where a computed target exceeds the maximum pan limit.
+
+Substituting the trigonometric identities for a half-circle phase shift into the panel normal derivation establishes that a $180\degr$ pan shift combined with a simultaneous tilt sign inversion yields an identical physical orientation. The consolidated reachability decision is formulated mathematically as:
+
+\begin{equation}
+    \thetapan^{*} = \begin{cases}
+        \thetapan & \text{if } |\thetapan| \leq 90\degr \\
+        \thetapan - \operatorname{sgn}(\thetapan) \cdot 180\degr, \;\; \thetatilt^{*} = -\thetatilt & \text{if } |\thetapan| > 90\degr \text{ and } |\thetapan^{*}| \leq 90\degr \\
+        \operatorname{sgn}(\thetapan) \cdot 90\degr & \text{otherwise}
+    \end{cases}
+    \label{eq:inv_decision}
+\end{equation}
+
+During active tracking, target transitions are smoothed using a blending factor of $\lambda_f = 0.5$ to ensure zeroth-order kinematic continuity of the servo velocity command. The geometric basis for this inverse mapping, alongside the pyramidal sensor architecture, is illustrated in Fig.~\ref{fig:sensing_and_kinematics}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{tikz_trials-16.pdf}
+    \caption{ Reactive tracking logic: (a) sensor architecture for irradiance differentiation; (b) kinematic mapping for
+blind-zone resolution and target acquisition.}
+    \label{fig:sensing_and_kinematics}
+\end{figure}
+
+%% ── SECTION 3: DYNAMIC PLANT AND ENERGY MODELLING ────────────
+\section{Modelling Framework}
+\label{sec:energy_models}
+
+\subsection{Electromechanical Servo Plant Model}
+\label{sec:servo_model}
+
+Each MG995R axis is modelled as a second-order nonlinear rotational plant~\cite{Ogata2010}. The internal circuitry of the servo converts the angular position error into a bounded torque command $u \in [-1,+1]$. The mechanical shaft dynamics and the corresponding instantaneous motor current are governed by~\cite{Ogata2010, TowerPro}:
+
+\begin{equation}
+    J\ddot{\theta} = u\,T_{\max}
+    - T_f(\dot{\theta},\,u) - B\dot{\theta}, \qquad
+    I(k) = I_{\mathrm{nL}}
+    + \lvert u(k)\rvert\,
+    \bigl(I_{\mathrm{stall}} - I_{\mathrm{nL}}\bigr)
+    \label{eq:servo_plant}
+\end{equation}
+
+where $T_f$ represents a composite three-regime Coulomb-plus-static friction term~\cite{Astrom2008}. Equation~(\ref{eq:servo_plant}) is integrated via the symplectic Euler scheme at $\dt = 0.01\,\mathrm{s}$, which conserves system energy and eliminates the numerical drift characteristic of explicit methods~\cite{Hairer2006}. The total instantaneous parasitic power and the system net power balance are defined as:
+
+\begin{equation}
+    P_{\mathrm{motor}}(k) =
+    \bigl(I_{\mathrm{pan}} + I_{\mathrm{tilt}}\bigr)V_{\mathrm{cc}},
+    \qquad
+    P_{\mathrm{net}}(k) =
+    P_{\mathrm{gross}}(k) - P_{\mathrm{motor}}(k)
+    \label{eq:power_balance}
+\end{equation}
+
+During designated stationary phases the actuators are de-energised ($I_{\mathrm{pan}} = I_{\mathrm{tilt}} = 0$), eliminating baseline consumption from the energy budget entirely~\cite{Rubio2007}.
+
+\subsection{Photovoltaic Power and Net-Yield Model}
+\label{sec:pv_model}
+
+Tracker performance is benchmarked against a fixed horizontal panel of identical active area, thereby isolating the geometric contribution of active dual-axis tracking~\cite{Tan2021}. Both configurations employ a monocrystalline silicon panel ($A = 0.04\,\mathrm{m}^2$, $\eta_{\mathrm{STC}} = 0.20$). Cell operating temperature is evaluated at every timestep using the Faiman thermal model~\cite{Faiman2008}:
+
+\begin{equation}
+    T_{\mathrm{cell}}(k) = T_{\mathrm{amb}}(k) +
+    \frac{G(k)}{U_0 + U_1\,W_s(k)}
+    \label{eq:faiman}
+\end{equation}
+
+where $T_{\mathrm{cell}}$ is the cell operating temperature, $T_{\mathrm{amb}}$ is the ambient temperature, $G$ is the incident irradiance, $W_s$ is the wind speed, and $U_0 = 25.0\,\mathrm{W\,m^{-2}\,K^{-1}}$ and $U_1 = 6.84\,\mathrm{W\,m^{-2}\,K^{-1}\,(m\,s^{-1})^{-1}}$ are the free-convection and wind-dependent heat-loss coefficients, respectively. All meteorological inputs are drawn from PVGIS TMY hourly records~\cite{PVGIS2023}.
+
+The temperature-corrected conversion efficiency is then evaluated as~\cite{Dubey2013}:
+
+\begin{equation}
+    \eta(k) = \eta_{\mathrm{STC}}\,\bigl[1 + \gamma_P\,
+    \bigl(T_{\mathrm{cell}}(k) - 25\bigr)\bigr]
+    \label{eq:eta_temp}
+\end{equation}
+
+where $\gamma_P = -0.004\,\mathrm{K}^{-1}$ is the power temperature coefficient for monocrystalline silicon~\cite{Dubey2013}. The instantaneous electrical output for the fixed and tracking configurations is accordingly:
+
+\begin{align}
+    P_{\mathrm{fixed}}(k) &= A\,\eta(k)\,G_{\mathrm{fixed}}(k)
+    \label{eq:P_fixed}\\
+    P_{\mathrm{gross}}(k) &= A\,\eta(k) \Bigl[
+    \mathrm{DNI}(k)\cos\thetainc(k)
+    + \mathrm{DHI}(k)\,\frac{1+\cos\thetatilt(k)}{2}
+    \Bigr]
+    \label{eq:P_gross}
+\end{align}
+
+where $\thetainc(k)$ is the solar incidence angle on the tracking panel, and $G_{\mathrm{fixed}}$ uses the GHI component for the horizontal reference panel. The net yield gain relative to the fixed baseline is:
+
+\begin{equation}
+    \Delta\eta = \frac{\sum_{k} \bigl(P_{\mathrm{net}}(k) -
+    P_{\mathrm{fixed}}(k)\bigr)\dt}
+    {\sum_{k} P_{\mathrm{fixed}}(k)\,\dt} \times 100\%
+    \label{eq:gain}
+\end{equation}
+
+A negative $\Delta\eta$ indicates that active tracking is energetically counterproductive under the prevailing conditions, a result that gross-yield metrics are structurally incapable of detecting owing to their omission of $P_{\mathrm{motor}}$ from the energy balance~\cite{Tan2021}.
+
+\subsection{Computational Framework and Simulation Procedure}
+\label{sec:sim_setup}
+
+Simulations were executed for three climatically distinct cities in
+Türkiye: Antalya ($36.9\degr$N, Mediterranean), Ankara ($39.9\degr$N,
+semi arid continental), and Istanbul ($41.0\degr$N, humid temperate).
+Meteorological forcing was derived from PVGIS SARAH-3 Typical
+Meteorological Year (TMY) datasets~\cite{PVGIS2023}, which provide
+hourly records of beam irradiance $G_b(i)$, diffuse irradiance
+$G_d(i)$, ambient temperature $T_{2m}$, and wind speed $W_s$. These
+records supply the irradiance terms that appear directly in
+Eq.~(\ref{eq:P_fixed}) and Eq.~(\ref{eq:P_gross}): the fixed-panel
+model uses the global horizontal irradiance
+$G_{\mathrm{fixed}}(k) = G_b(i) + G_d(i)$, while the tracker model
+uses the beam component $\mathrm{DNI}(k) = G_b(i)$ and the diffuse
+component $\mathrm{DHI}(k) = G_d(i)$ at the corresponding clock
+hour $i$.
+
+The controller and plant model operate at a fixed timestep of
+$\Delta t = 0.01\,\mathrm{s}$; direct use of 8760 hourly PVGIS
+records at this resolution would require $3.15 \times 10^7$
+integration steps per city, imposing an impractical computational
+burden. The simulation therefore adopts the representative-day
+method of Klein~\cite{Duffie2013}, in which each calendar month $m$
+is characterised by a single representative Julian day $d_m$ whose
+solar declination matches the monthly mean. The twelve representative
+days are $d = [17,\,47,\,75,\,105,\,135,\,162,\,198,\,228,\,258,
+\,288,\,318,\,344]$~\cite{Duffie2013}, yielding
+$12 \times 86\,400 = 1\,036\,800$ integration steps per city.
+Within each representative day, PVGIS hourly values are averaged
+across all calendar days of the corresponding month at each clock
+hour, forming a $[12 \times 24]$ lookup table per meteorological
+variable. The monthly energy yield is then obtained by integrating
+the per-second net power over the representative day and scaling by
+the number of calendar days $N_m$ in that month:
+
+\begin{equation}
+    E_{\mathrm{month},m} = N_m \sum_{k=1}^{86400}
+    P_{\mathrm{net}}(k)\,\Delta t
+    \label{eq:monthly_energy}
+\end{equation}
+
+The annual yield is the sum over all twelve months:
+
+\begin{equation}
+    E_{\mathrm{annual}} = \sum_{m=1}^{12} E_{\mathrm{month},m}
+    \label{eq:annual_energy}
+\end{equation}
+
+The same scaling applies to both the tracker and fixed-panel
+configurations, ensuring a consistent basis for the net gain
+calculation in Eq.~(\ref{eq:gain}).
+
+%% ── SECTION 4: CONTROL ARCHITECTURE ─────────────────────────
+\section{Control Architecture}
+\label{sec:control}
+\subsection{Finite-State Supervisory Control}
+\label{sec:fsm}
+The system operates under a state-based supervisory control architecture in which a four-state finite state machine (FSM) governs actuator activation and the move and sleep duty cycling strategy~\cite{Rubio2007}. The four operative states and their transition conditions are summarised in Table~\ref{tab:fsm_states}.
+\begin{table}[!ht]
+\centering
+\caption{FSM State Definitions and Transition Conditions}
+\label{tab:fsm_states}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}p{1.6cm}p{5.0cm}p{6.2cm}@{}}
+\toprule
+\textbf{State} & \textbf{Actuator action} & \textbf{Exit condition} \\
+\midrule
+Idle     & Both axes de-energised; position held &
+    $\Sigma V_k > 0.30\,\mathrm{V}$ $\Rightarrow$ Search \\[2pt]
+Search   & Archimedean spiral scan~\cite{Hafez2018} at
+    $0.1\,\mathrm{deg/s}$, $20\degr$ cap &
+    $\Sigma V_k > 1.0\,\mathrm{V}$ $\Rightarrow$ Tracking;
+    5-min timeout $\Rightarrow$ Idle \\[2pt]
+Tracking & PI velocity controller active &
+    $e_{\mathrm{total}} < \varepsilon_{\mathrm{lock}}$ for $T_{\mathrm{burst}}$
+    $\Rightarrow$ Hold;
+    $\Sigma V_k < V_{\mathrm{lost}}$ $\Rightarrow$ Search \\[2pt]
+Hold     & Both axes de-energised; integrators reset~\cite{Ogata2010} &
+    $e_{\mathrm{total}} > \varepsilon_{\mathrm{db}}$ after $1.5\,\mathrm{s}$
+    $\Rightarrow$ Tracking \\
+\bottomrule
+\end{tabular}
+\end{table}
+The cyclic Tracking--Hold--Tracking sequence implements the move and sleep duty cycle: actuators are energised exclusively to correct errors exceeding the wake-up deadband $\varepsilon_{\mathrm{db}} = 6.0\degr$, and de-energised during the subsequent quiescent intervals~\cite{Rubio2007, Tan2021}. The $1.5\degr$ lock threshold and the $6.0\degr$ wake-up deadband form a deliberate hysteresis band that prevents rapid toggling between active and quiescent states. To prevent mechanical singularity near the zenith, a zenith lock progressively engages when $\thetatilt > 75\degr$, linearly tapering the pan error signal to zero at $\thetatilt = 88\degr$.
+
+
+\subsection{Velocity Mode PI Control and Gain Optimisation}
+\label{sec:pid}
+
+During active Tracking phases, a velocity mode proportional-integral (PI) controller independently governs the angular velocity for both pan and tilt axes. The complete closed-loop architecture, integrating the LDR sensor model, FSM supervisor, control law, and servo plant, is illustrated in Fig.~\ref{fig:pi_control}.
+
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=0.95\columnwidth]{tikz_trials-18.pdf}
+    \caption{Block diagram of the closed-loop velocity control architecture. Reactive LDR feedback, FSM duty cycling, and gimbal inverse kinematics are integrated without recourse to astronomical ephemeris data.}
+    \label{fig:pi_control}
+\end{figure}
+
+For a given axis $a \in \{\mathrm{pan}, \mathrm{tilt}\}$, the discrete-time velocity command is formulated as~\cite{Ogata2010}:
+
+\begin{equation}
+    v_a(k) = K_p\,e_a(k) + K_i\,I_a(k)
+    \label{eq:pi_law}
+\end{equation}
+
+where $v_a(k)$ is the angular velocity command for axis $a$, $K_p$ and $K_i$ are the proportional and integral gains, $e_a(k)$ is the axis tracking error from Eq.~(\ref{eq:angular_errors}), and $I_a(k)$ is the integrator state accumulator.
+
+Gain selection was approached as a multi-objective optimisation problem, minimising both the Integral of Time multiplied Absolute Error (ITAE) and cumulative control energy simultaneously~\cite{Ogata2010}. Four candidate algorithms were evaluated across three representative operational profiles (step response, real-sun ramp tracking, and external disturbance rejection): Ziegler--Nichols (used as a deterministic baseline)~\cite{Ogata2010}, Nelder--Mead~\cite{Singer2009}, Particle Swarm Optimisation (PSO)~\cite{Kennedy1995}, and Differential Evolution (DE)~\cite{Storn1997}.
+
+Convergence of both PSO and DE to a Pareto-optimal solution confirmed that $K_p = 3.188$ and $K_i = 10.317$ yield the optimal trade-off between tracking precision and parasitic energy expenditure. Parametric sensitivity analysis confirmed a maximum ITAE degradation of less than $5\%$ under $\pm20\%$ bounded uncertainty in plant inertia and friction.
+
+The raw velocity command is saturated through a hyperbolic tangent function to enforce the hardware slew limit $v_{\max} = 15\,\mathrm{deg/s}$ in a continuously differentiable manner. In contrast to standard saturation functions, this approach employs a hyperbolic tangent transition to ensure that discontinuous acceleration spikes (infinite jerk) that would accelerate mechanical wear on the servo gear train are eliminated. A back-calculation anti-windup scheme simultaneously prevents integrator saturation by injecting the clipping residual with tracking gain $K_t = 1/K_i$~\cite{Astrom1995book}:
+
+\begin{equation}
+    \tilde{v}_a(k) = v_{\max}\tanh\!\left(\frac{v_a(k)}{v_{\max}}\right), \qquad
+    I_a(k) = I_a(k-1) + \Bigl[ e_a(k) + K_t\!\left(\tilde{v}_a(k) - v_a(k)\right) \Bigr] \dt
+    \label{eq:sat_and_windup}
+\end{equation}
+
+The integrator is additionally clamped to $\pm I_{\max} = \pm10\,\mathrm{deg\cdot s}$ as a secondary safeguard. Both integrators are reset upon every transition to Idle or Hold, ensuring that latent wind up accumulated during prior Tracking intervals cannot corrupt the velocity command upon re-entry to the active control state.
+
+
+%% ── SECTION 5: RESULTS ───────────────────────────────────────
+\section{Results and Discussion}
+\label{sec:results}
+
+%% ── SECTION 5.1 ─────────────────────────────────────────────
+\subsection{Performance Assessment of the Solar Tracker}
+\label{sec:results_yield}
+
+Simulation results are reported as specific net yield gain $\Delta\eta$
+relative to the co-located fixed horizontal baseline, evaluated under
+PVGIS TMY irradiance and with per-timestep Faiman cell temperature
+correction applied to both configurations~\cite{Faiman2008}.
+Table~\ref{tab:annual_summary} consolidates the principal annual
+metrics for the three study locations.
+
+\begin{table}[!ht]
+\centering
+\caption{Annual Net Yield Summary: Dual-Axis Tracker vs.\ Fixed
+         Horizontal Panel (Faiman Temperature-Corrected)}
+\label{tab:annual_summary}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}lS[table-format=+2.2]
+                    S[table-format=2.1]
+                    S[table-format=2.1]
+                    S[table-format=+1.1]
+                    c c@{}}
+\toprule
+\textbf{Location} &
+{\textbf{$\Delta\eta_{\mathrm{net}}$ (\%)}} &
+{$\bar{T}_{\mathrm{cell}}^{\mathrm{fix}}$ (\si{\degreeCelsius})} &
+{$\bar{T}_{\mathrm{cell}}^{\mathrm{trk}}$ (\si{\degreeCelsius})} &
+{$\Delta T$ (K)} &
+\textbf{Peak month (\%)} &
+\textbf{Trough month (\%)} \\
+\midrule
+Antalya  & +27.18 & 28.8 & 32.3 & +3.5 &
+    Dec $+79.3$ & Jun $+1.7$  \\
+Ankara   & +24.88 & 24.0 & 27.5 & +3.5 &
+    Dec $+85.5$ & Jun $-4.9$  \\
+Istanbul & +20.67 & 25.0 & 29.0 & +4.0 &
+    Dec $+62.3$ & Jun $-4.9$  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All three locations return a positive annual net gain, confirming
+that the move and sleep duty cycling strategy successfully suppresses
+parasitic motor consumption to a level well below the irradiance
+gain afforded by active pointing. Antalya yields the highest annual
+benefit ($\Delta\eta = +27.18\%$, $\Delta E = 3.881\,\mathrm{kWh/yr}$),
+followed by Ankara ($+24.88\%$, $3.139\,\mathrm{kWh/yr}$) and
+Istanbul ($+20.67\%$, $2.411\,\mathrm{kWh/yr}$). The ranking is
+consistent with decreasing annual direct normal irradiance from south
+to north within Türkiye~\cite{PVGIS2023}. The geographic spread
+of annual net gains reflects a fundamental relationship between DNI
+quality and tracker economics: Antalya's high DNI fraction readily
+subsidises the parasitic motor consumption, whereas Istanbul's more
+diffuse coastal radiation regime narrows the net margin to the point
+where summer months yield a net loss. The monthly breakdown of net
+efficiency gain for all three locations is illustrated in
+Fig.~\ref{fig:net_gain_all}.
+
+\begin{figure*}[!ht]
+    \centering
+    \begin{subfigure}[b]{\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.25\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig1a_Antalya.png}
+        \caption{}
+
+        \label{fig:gain_antalya}
+    \end{subfigure}
+    \vspace{6pt}
+    \begin{subfigure}[b]{\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.25\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig1b_Ankara.png}
+        \caption{}
+
+        \label{fig:gain_ankara}
+    \end{subfigure}
+    \vspace{6pt}
+    \begin{subfigure}[b]{\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.25\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig1c_Istanbul.png}
+        \caption{}
+        \label{fig:gain_istanbul}
+    \end{subfigure}
+    %% FIX: replaced literal Unicode Δ and η with LaTeX math commands
+    \caption{Monthly net efficiency gain $\Delta\eta$ of the dual-axis tracker relative to the fixed horizontal baseline for (a) Antalya, (b) Ankara, and (c) Istanbul.}
+    \label{fig:net_gain_all}
+\end{figure*}
+
+%% ── SECTION 5.2 ─────────────────────────────────────────────
+\subsection{Thermal Effects on Solar Tracker Performance}
+\label{sec:results_thermal}
+
+Because the tracking configuration sustains a higher plane-of-array
+irradiance than the fixed panel throughout the day, its cell
+temperature is consistently elevated. The annual mean cell
+temperature of the tracker exceeds the fixed baseline by
+$3.5\,\mathrm{K}$ in both Antalya and Ankara, and by $4.0\,\mathrm{K}$
+in Istanbul. With $\gamma_P = -0.004\,\mathrm{K}^{-1}$ for
+monocrystalline silicon~\cite{Dubey2013}, this differential suppresses
+the tracker's temperature-corrected conversion efficiency relative to
+its temperature-na\"{i}ve estimate by a peak of $0.40$ percentage
+points in Antalya (September) and $0.38$ percentage points in Ankara
+(September), as illustrated in Fig.~\ref{fig:matrix_all}(a,c,e). The
+asymmetry is physically significant: higher POA irradiance causes
+proportionally greater self-heating on the tracker side, reducing
+its apparent gain below what a constant efficiency model would
+predict. Tracker cell temperatures peak above
+$44\,\mathrm{{}^{\circ}C}$ in Ankara and Antalya during
+July--August, as shown in Fig.~\ref{fig:matrix_all}(b,d,f). This
+mechanism is invisible to a constant-$\eta_{\mathrm{STC}}$
+formulation and is fully resolved here through the Faiman thermal
+model~\cite{Faiman2008}.
+
+\begin{figure*}[!ht]
+    \centering
+    %% Row 1 — Antalya
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth,height=0.24\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig2a_Eff_Antalya.png}
+        \caption{}
+        \label{fig:eff_antalya}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth,height=0.24\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig3a_Temp_Antalya.png}
+        \caption{}
+        \label{fig:temp_antalya}
+    \end{subfigure}
+    \vspace{8pt}
+    %% Row 2 — Ankara
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth,height=0.24\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig2b_Eff_Ankara.png}
+        \caption{}
+        \label{fig:eff_ankara}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth,height=0.24\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig3b_Temp_Ankara.png}
+        \caption{}
+        \label{fig:temp_ankara}
+    \end{subfigure}
+    \vspace{8pt}
+    %% Row 3 — Istanbul
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth,height=0.24\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig2c_Eff_Istanbul.png}
+        \caption{}
+        \label{fig:eff_istanbul}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth,height=0.24\textheight,keepaspectratio,trim=10 10 10 10,clip]{Fig3c_Temp_Istanbul.png}
+        \caption{}
+        \label{fig:temp_istanbul}
+    \end{subfigure}
+    \caption{Monthly thermal performance for Antalya (a,b), Ankara
+    (c,d), and Istanbul (e,f). Left column (a,c,e): temperature-corrected
+    panel efficiency $\eta_{\mathrm{fix}}$ (blue) and
+    $\eta_{\mathrm{trk}}$ (red); dashed line denotes
+    $\eta_{\mathrm{STC}} = 20\%$. Right column (b,d,f): monthly mean
+    cell temperatures for ambient $T_{\mathrm{amb}}$ (purple), fixed
+    panel $T_{\mathrm{cell,fix}}$ (blue), and tracking configuration
+    $T_{\mathrm{cell,trk}}$ (red); dashed line marks the STC reference
+    of $25\,{}^{\circ}\mathrm{C}$.}
+    \label{fig:matrix_all}
+\end{figure*}
+
+%% ── SECTION 5.3 ─────────────────────────────────────────────
+\subsection{Seasonal Behaviour and Tracker Viability}
+\label{sec:results_seasonal}
+
+The monthly gain profiles exhibit a pronounced U-shaped seasonal
+structure at all three sites: gains peak in the winter months
+($+54$--$+86\%$ in December--January) and compress sharply to their
+minimum in June. This behaviour is a direct consequence of solar
+geometry. In winter, the solar arc subtends a low elevation angle
+and a limited azimuthal sweep; a horizontal fixed panel therefore
+captures only a small fraction of the available beam irradiance,
+while the tracker, maintaining near-normal incidence throughout
+the day, recovers the full cosine projection penalty. In summer,
+the sun transits a wide arc at high elevation, substantially
+closing the geometric advantage between the two configurations.
+
+A negative $\Delta\eta$ is recorded in June for both Istanbul
+($-4.9\%$) and Ankara ($-4.9\%$), and additionally in May for
+Ankara ($-2.4\%$). Istanbul's May result remains marginally
+positive ($+0.9\%$), while Antalya stays positive throughout the
+year (June: $+1.7\%$), attributable to its higher direct normal
+irradiance fraction relative to the more diffuse coastal and
+continental regimes. In these months, the combination of a
+compressed geometric advantage, elevated cell self-heating, and
+non-trivial parasitic motor consumption collectively erodes the
+net benefit below zero. Gross-yield metrics, which omit
+$P_{\mathrm{motor}}$ from the energy balance, report a positive
+tracking advantage in every month of the year for all three
+locations, systematically overstating the energetic benefit of
+active tracking under high-irradiance, high-elevation summer
+conditions~\cite{Tan2021}.
+
+%% ── SECTION 5.4 ─────────────────────────────────────────────
+\subsection{Environmental Implications of the Solar Tracker}
+\label{sec:environmental}
+
+Beyond the energetic comparison between the fixed PV configuration
+and the proposed solar tracker, the obtained electricity generation
+results can also be interpreted from an environmental perspective.
+Since PV electricity directly offsets grid electricity demand, the
+additional net electricity generated by the tracker contributes to
+the reduction of CO$_2$ emissions associated with grid-based
+electricity production~\cite{Parlak2024}.
+
+To estimate this environmental benefit, a grid emission factor for
+Türkiye was formulated based on the electricity generation mix
+and source-specific life-cycle emission factors. According to
+national electricity statistics, electricity production in 2025
+consisted of 33.6\% coal, 23.0\% natural gas, 15.8\% hydropower,
+10.9\% wind, 10.5\% solar, and 3.2\% geothermal energy, while the
+remaining 3.0\% was generated from other sources~\cite{Enerji2025}.
+The corresponding source-specific life-cycle emission factors were
+taken as $820\,\mathrm{gCO_2\text{-}eq/kWh}$ for coal,
+$490\,\mathrm{gCO_2\text{-}eq/kWh}$ for natural gas,
+$24\,\mathrm{gCO_2\text{-}eq/kWh}$ for hydropower,
+$11\,\mathrm{gCO_2\text{-}eq/kWh}$ for wind,
+$48\,\mathrm{gCO_2\text{-}eq/kWh}$ for solar PV electricity, and
+$38\,\mathrm{gCO_2\text{-}eq/kWh}$ for geothermal
+energy~\cite{WNA2025}.
+
+Accordingly, the grid-mix emission factor can be expressed
+as~\cite{Yavasoglu2025}:
+
+\begin{equation}
+    EF_{\mathrm{grid}} = \sum_{i=1}^{n} s_i\, EF_i
+    \label{eq:ef_grid}
+\end{equation}
+
+where $EF_{\mathrm{grid}}$ is the average life-cycle grid emission
+factor of Türkiye, $s_i$ is the electricity generation share of
+source $i$, $EF_i$ is the life-cycle emission factor of source $i$,
+and $n$ represents the total number of electricity generation sources
+included in the mix. Based on Eq.~(\ref{eq:ef_grid}), the average
+grid emission factor of Türkiye was calculated as
+$400\,\mathrm{gCO_2\text{-}eq/kWh}$. Using this factor, the
+source-level CO$_2$ emissions avoided by PV electricity generation
+can be evaluated as:
+
+\begin{equation}
+    \Delta\mathrm{CO}_2 = E_{\mathrm{gain}} \times EF_{\mathrm{grid}}
+    \label{eq:avoided_co2}
+\end{equation}
+
+where $\Delta\mathrm{CO}_2$ is the avoided source-level CO$_2$
+emissions, and $E_{\mathrm{gain}}$ is the additional net electricity
+generation achieved by the solar tracker relative to the fixed PV
+configuration. Table~\ref{tab:environmental_benefit} summarises the
+environmental benefit of the proposed solar tracker for the three
+representative cities analysed in this study. The additional
+electricity generated by the tracker relative to the fixed
+configuration is translated into avoided source-level CO$_2$
+emissions using the calculated grid emission factor.
+
+\begin{table}[!ht]
+\centering
+\caption{Tracker-induced energy gain and associated avoided
+         source-level CO$_2$ emissions}
+\label{tab:environmental_benefit}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{City} &
+\textbf{\shortstack{Fixed PV\\Generation\\(kWh/year)}} &
+\textbf{\shortstack{Tracker PV\\Generation\textsuperscript{*}\\(kWh/year)}} &
+\textbf{\shortstack{Tracker-Induced\\Net Energy Gain\\(kWh/year)}} &
+\textbf{\shortstack{Tracker-Induced\\Avoided Emissions\\(kgCO$_2$-eq/year)}} \\
+\midrule
+Istanbul & 11.667 & 14.078 & 2.411 & 0.96 \\
+Ankara   & 12.619 & 15.759 & 3.139 & 1.26 \\
+Antalya  & 14.281 & 18.162 & 3.881 & 1.55 \\
+\bottomrule
+\end{tabular}
+\\[4pt]
+\raggedright\footnotesize
+\textsuperscript{*}Tracker PV generation includes the electrical
+energy consumed by the tracking actuators; therefore, the reported
+values represent net annual PV electricity generation.
+\end{table}
+
+The results indicate that the proposed solar tracker consistently
+provides higher annual electricity generation than the fixed PV
+configuration in all analysed locations. Consequently, the tracker
+achieves additional carbon emission mitigation by displacing a
+greater amount of grid electricity. However, the absolute magnitude
+of the avoided source-level CO$_2$ emissions remains relatively
+modest, ranging between approximately
+$0.96$--$1.55\,\mathrm{kgCO_2\text{-}eq/year}$, which primarily
+reflects the deliberately small PV area considered in the simulation
+framework ($A = 0.04\,\mathrm{m}^2$).
+
+To better contextualise the environmental significance of these
+results, the avoided source-level CO$_2$ emissions can also be
+expressed on an area-normalised basis. Given that the PV area used
+in the simulations is only $0.04\,\mathrm{m}^2$, the
+tracker-induced emission mitigation corresponds to approximately
+24.1~kgCO$_2$-eq per square meter per year for Istanbul,
+31.4~kgCO$_2$-eq per square meter per year for Ankara, and
+38.8~kgCO$_2$-eq per square meter per year for Antalya, representing
+a $38\%$ spread that directly mirrors the gradient in net energy
+gain across the three radiation regimes. When interpreted in this
+form, the environmental benefit becomes considerably more
+pronounced. These values highlight that the relatively small absolute
+reductions reported in Table~\ref{tab:environmental_benefit} are
+mainly a consequence of the limited experimental PV surface rather
+than the intrinsic effectiveness of the tracking concept. Moreover,
+the observed regional disparity confirms that the CO$_2$ mitigation
+potential of a tracking system cannot be reliably estimated from
+national averages alone; site-specific irradiance characterisation
+is therefore essential for evaluating both the environmental and
+economic case for tracker deployment~\cite{Parlak2024}. In
+practical PV deployments with substantially larger module areas,
+the same proportional energy gain would translate into
+significantly greater carbon mitigation.
+
+%% ── SECTION 6: CONCLUSION ────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented the design, performance assessment, and
+environmental impact analysis of a deployable dual-axis petal form
+solar tracker governed by a hybrid supervisory control architecture.
+Evaluations conducted for Antalya, Ankara, and Istanbul representing
+Mediterranean, semi arid, and temperate maritime regimes utilised
+PVGIS SARAH-3 TMY data integrated with a Faiman thermal model and
+explicit deduction of per second parasitic motor loads. Analysis of
+these results indicates that the tracker achieves its peak utility
+during winter months, where net efficiency gains reach as high as
+$85.5\%$ relative to fixed configurations. This seasonal success
+underpins consistent annual net energy gains of $27.18\%$
+($3.881\,\mathrm{kWh/yr}$), $24.88\%$ ($3.139\,\mathrm{kWh/yr}$),
+and $20.67\%$ ($2.411\,\mathrm{kWh/yr}$) across the respective test
+sites.
+
+The study further demonstrates that net yield analysis is
+indispensable for accurate modelling; traditional gross metrics
+systematically overstate advantages and fail to account for negative
+returns during peak summer reaching as low as $-4.9\%$, driven by
+elevated parasitic consumption. In parallel, the Faiman thermal model
+identified a self-heating penalty of up to $0.40$ percentage points
+in conversion efficiency, representing a systematic bias that remains
+invisible in constant-$\eta$ formulations.
+
+Environmental results also considered area normalised CO$_2$
+avoidance as a critical metric for sustainability, which ranged from
+$38.8$ to $24.1\,\mathrm{kgCO_2\text{-}eq\,m^{-2}\,yr^{-1}}$.
+These findings are particularly significant as they establish that
+the environmental feasibility of solar tracking is strictly coupled
+to local radiation quality rather than national grid averages alone.
+By highlighting these regional disparities, the analysis demonstrates
+that localised data is essential for justifying the carbon footprint
+of the tracking hardware itself.
+
+Future work will extend the simulation to experimental hardware
+validation under outdoor conditions, investigate the impact of
+stochastic cloud transients on the FSM duty cycle frequency, and
+explore adaptive parasitic-aware control strategies that adjust
+move and sleep thresholds in real time based on instantaneous
+irradiance forecasts. Integration of the petal form mechanical
+concept with vehicle-integrated photovoltaic platforms represents
+a further avenue for investigation.
+
+%% ── BIBLIOGRAPHY ─────────────────────────────────────────────
+\bibliographystyle{elsarticle-num}
+\bibliography{references}
+\end{document}

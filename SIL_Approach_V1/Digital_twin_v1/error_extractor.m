@@ -21,12 +21,12 @@ function [e_pan, e_tilt, e_total, V_sum] = error_extractor(ldr_adc)
     %   V_D > V_U  => e_tilt > 0
 
     % ADC -> voltaj (3.3 V referans, 12-bit)
-    V = single(ldr_adc) * 3.3 / 4095;
+    V = single(ldr_adc(:)) * 3.3 / 4095;
 
     V_R = V(1);  V_L = V(2);  V_U = V(3);  V_D = V(4);
     eps_reg = single(1e-3);            % sifira bolme korumasi
 
-    % Eq. 5: normalize edilmis voltaj farki (irradyans buyuklugune duyarsiz)
+    % Eq. 5: normalize edilmis voltaj farki (irradyans buyuklugune dsuyarsiz)
     e_pan_hat  = (V_R - V_L) / (V_R + V_L + eps_reg);
     e_tilt_hat = (V_D - V_U) / (V_U + V_D + eps_reg);
 
