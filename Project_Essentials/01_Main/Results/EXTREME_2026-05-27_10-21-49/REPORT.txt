@@ -1,0 +1,102 @@
+═══════════════════════════════════════════════════════════════
+           SOLAR TRACKER SIMULATION REPORT
+═══════════════════════════════════════════════════════════════
+
+TEST PARAMETERS
+───────────────────────────────────────────────────────────────
+Scenario:           EXTREME
+Control Mode:       pid
+Duration:           1000 seconds (16.67 minutes)
+Sun Motion Speed:   5.0000 °/s
+Sampling Rate:      100 Hz (dt=0.010 s)
+Total Data Points:  100001
+
+TRACKING ACCURACY
+───────────────────────────────────────────────────────────────
+Mean Incidence Error:     11.6558 deg
+Max Incidence Error:      95.7538 deg
+Final (Steady-State):     19.4790 deg
+Lock Percentage:          18.38%
+
+ADVANCED METRICS
+───────────────────────────────────────────────────────────────
+Settling Time:            0.00 seconds
+Rise Time (90%):          0.00 seconds
+Overshoot:                391.58%
+Steady-State Error:       15.3703 deg
+
+SERVO PERFORMANCE
+───────────────────────────────────────────────────────────────
+Max Pan Velocity:         300.00 °/s
+Max Tilt Velocity:        300.00 °/s
+Servo Speed Limit:        300.00 °/s
+
+ENERGY CONSUMPTION
+───────────────────────────────────────────────────────────────
+Total Energy:             0.7292 Wh
+Average Power:            2.63 W
+Peak Power:               24.00 W
+
+
+ENERGY BALANCE (Tracker Panel: 0.04 m² @ 20% efficiency)
+───────────────────────────────────────────────────────────────
+Total Available Solar:    0.5141 Wh
+Total Used by Motors:     0.7292 Wh
+Net Energy Balance:       -0.2151 Wh
+System Efficiency:        141.83%
+
+SUB-PANEL POWER DISTRIBUTION
+───────────────────────────────────────────────────────────────
+Sub-Panel Specifications:
+  Area per panel:         0.050 m²
+  Efficiency:             18.00%
+  Total sub-panel energy: 5.3264 Wh
+  Breakdown by face:
+    Right (+X):           1.3229 Wh
+    Left  (-X):           1.3403 Wh
+    Up    (+Y):           1.3340 Wh
+    Down  (-Y):           1.3291 Wh
+
+SIMULATION MODE
+───────────────────────────────────────────────────────────────
+Mode:                     EXTREME (Spiral/Test)
+Test Duration:            1000 seconds
+
+PID PARAMETERS
+───────────────────────────────────────────────────────────────
+Proportional Gain (Kp):   3.1880
+Integral Gain (Ki):       10.3173
+Derivative Gain (Kd):     0.0000
+Max Integral:             10.00
+
+FSM THRESHOLDS
+───────────────────────────────────────────────────────────────
+Night Threshold:          0.30 V
+Sun Lost Threshold:       0.50 V
+Sun Found Threshold:      1.00 V
+Lock Threshold:           0.50 deg
+
+GENERATED FILES
+───────────────────────────────────────────────────────────────
+01_System_Performance.png
+02_LDR_Sensor_Analysis.png
+03_Controller_Analysis.png
+04_FSM_State_Machine.png
+05_Energy_Analysis.png
+06_Motor_Control_Trajectory.png
+07_Energy_Balance.png
+01_Tracking_Performance.png  (Academic tiledlayout)
+02_LDR_Sensor_Analysis.png   (Academic tiledlayout)
+03_Controller_Internals.png  (Academic tiledlayout)
+04_FSM_Analysis.png          (Academic tiledlayout)
+05_SubPanel_Power.png        (Academic tiledlayout)
+05b_SubPanel_Energy_Summary.png
+06_Energy_Budget.png         (Academic tiledlayout)
+07_Gimbal_Trajectory.png     (Academic tiledlayout)
+08_Error_And_Energy.png      (Academic tiledlayout)
+simulation_log.csv
+REPORT.txt
+
+═══════════════════════════════════════════════════════════════
+Report generated: 27-May-2026 10:22:54
+═══════════════════════════════════════════════════════════════
